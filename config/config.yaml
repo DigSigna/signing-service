@@ -1,0 +1,53 @@
+project:
+  name: "Signing Service"
+  version: "1.0.0"
+  api_v1_str: "/api/v1"
+
+environment: "development"
+logging:
+  level: "INFO"
+
+database:
+  # Sin default funcional a propósito: si DB_URL no está seteada, el arranque
+  # debe fallar (ver Settings.ensure_database_config en app/core/config.py).
+  url: "${DB_URL}"
+
+redis:
+  host: "${REDIS_HOST:localhost}"
+  port: ${REDIS_PORT:6379}
+  password: "${REDIS_PASSWORD:}"
+  db: ${REDIS_DB:0}
+
+hsm:
+  library_path: "${HSM_LIBRARY_PATH:}"
+  backend: "${HSM_BACKEND:}"
+  service_base_url: "${HSM_SERVICE_BASE_URL:}"
+  service_timeout: "${HSM_SERVICE_TIMEOUT:5s}"
+  token_label: "${HSM_TOKEN_LABEL:}"
+  pin: "${HSM_PIN:}"
+  slot: ${HSM_SLOT:0}
+  session_timeout: "${HSM_SESSION_TIMEOUT:30s}"
+  max_sessions: ${HSM_MAX_SESSIONS:10}
+
+audit:
+  enabled: ${AUDIT_ENABLED:true}
+  strategy: "${AUDIT_STRATEGY:hybrid}"
+  http:
+    base_url: "${AUDIT_HTTP_BASE_URL:}"
+    timeout: "${AUDIT_HTTP_TIMEOUT:5s}"
+  hybrid:
+    circuit_breaker:
+      max_failures: ${AUDIT_HYBRID_MAX_FAILURES:3}
+      reset_timeout: "${AUDIT_HYBRID_RESET_TIMEOUT:30s}"
+
+auth:
+  mode: "${AUTH_MODE:development}"
+  public_key_path: "${AUTH_PUBLIC_KEY_PATH:./keys/public.pem}"
+  jwks_url: "${AUTH_JWKS_URL:}"
+  jwks_cache_minutes: ${AUTH_JWKS_CACHE_MINUTES:60}
+  issuer: "${AUTH_ISSUER:}"
+  audience: "${AUTH_AUDIENCE:}"
+  token_cache_enabled: ${AUTH_TOKEN_CACHE_ENABLED:false}
+  token_cache_strict: ${AUTH_TOKEN_CACHE_STRICT:true}
+  token_cache_prefix: "${AUTH_TOKEN_CACHE_PREFIX:token}"
+  token_cache_timeout: "${AUTH_TOKEN_CACHE_TIMEOUT:1s}"

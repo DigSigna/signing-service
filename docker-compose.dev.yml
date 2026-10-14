@@ -1,0 +1,53 @@
+version: '3.8'
+
+# Requiere que el stack de hsm-service ya esté corriendo primero:
+#   cd ../hsm-service && make dev-up   (o make up, según su Makefile)
+# Ese compose crea la red externa "hsm-network" y el servicio "mysql"
+# (esquema compartido "digsigna", aplicado por su contenedor "migrate")
+# que este servicio consume. No levanta su propia base de datos: signing-service,
+# certificate-service y hsm-service comparten la misma instancia MySQL para
+# evitar esquemas divergentes. Si necesitás correr signing-service sin
+# depender de hsm-service, usá `make infra-up` (docker-compose.yml) +
+# HSM_BACKEND=in_memory.
+
+services:
+  signing-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: signing-service:dev
+    container_name: signing-service-dev
+    environment:
+      ENVIRONMENT: development
+      LOG_LEVEL: INFO
+      CONFIG_FILE: /app/config/config.yaml
+
+      # Esquema MySQL compartido con hsm-service (ver nota arriba)
+      DB_URL: "mysql://digsigna:digsigna@mysql:3306/digsigna"
+
+      # Auth JWT local (clave pública montada desde ./keys)
+      AUTH_MODE: development
+      AUTH_PUBLIC_KEY_PATH: /app/keys/public.pem
+      AUTH_TOKEN_CACHE_ENABLED: "false"
+
+      # HSM real vía hsm-service (nombre de servicio en hsm-network, puerto interno del contenedor)
+      HSM_BACKEND: remote
+      HSM_SERVICE_BASE_URL: "http://hsm-service:8080"
+      HSM_SERVICE_TIMEOUT: 5s
+
+      # Auditoría: hybrid cae a solo-DB si no hay AUDIT_HTTP_BASE_URL (ver app/infrastructure/audit/factory.py)
+      AUDIT_ENABLED: "true"
+      AUDIT_STRATEGY: hybrid
+    ports:
+      - "8001:8001"
+    volumes:
+      - .:/app
+      - ./keys:/app/keys:ro
+    networks:
+      - hsm-network
+    mem_limit: 96m
+
+networks:
+  hsm-network:
+    external: true
+    name: hsm-network

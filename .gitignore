@@ -1,0 +1,12 @@
+.env
+keys/
+pytest_cache/
+.scannerwork/
+venv/
+__pycache__/
+bandit-results.json
+flake8-report.json
+safety-report.json
+sonar_status.json
+test-results.xml
+.coverage

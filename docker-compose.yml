@@ -1,0 +1,41 @@
+version: '3.8'
+
+# Infra "standalone": solo para correr signing-service AISLADO de
+# hsm-service, con HSM_BACKEND=in_memory (stub) y uvicorn corriendo fuera
+# de Docker (ver README). Levanta su propia base MySQL descartable y aplica
+# el esquema compartido con la misma imagen de migraciones que usa hsm-service.
+#
+# No corras esto al mismo tiempo que el stack de hsm-service: ambos publican
+# MySQL en el puerto 3306 del host y van a chocar. Para integración real con
+# el HSM remoto, usá docker-compose.dev.yml en su lugar (ver nota ahí).
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: signing-service-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: digsigna
+      MYSQL_USER: digsigna
+      MYSQL_PASSWORD: digsigna
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'mysql', '-h', 'localhost', '-u', 'digsigna', '-pdigsigna', '-e', 'SELECT 1']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    image: ghcr.io/digsigna/migrations:1.0.65
+    environment:
+      DATABASE_URL: "digsigna:digsigna@tcp(mysql:3306)/digsigna?parseTime=true"
+    command: up
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql_data:

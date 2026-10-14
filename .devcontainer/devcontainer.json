@@ -1,0 +1,17 @@
+{
+  "name": "certificate-service",
+  "dockerComposeFile": ["../docker-compose.dev.yml"],
+  "service": "certificate-service",
+  "workspaceFolder": "/app",
+  "shutdownAction": "stopCompose",
+  "runServices": ["certificate-service", "redis"],
+  "overrideCommand": false,
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-azuretools.vscode-docker"
+      ]
+    }
+  }
+}
