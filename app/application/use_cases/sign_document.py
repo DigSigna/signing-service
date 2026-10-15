@@ -1,23 +1,23 @@
 """POST /api/v1/sign use case.
 
 Order of operations, and why: hash the document (for our own record,
-`signing_requests.document_hash` — not what's sent to hsm-service, see
-step 5) -> fetch the certificate -> validate its chain -> resolve a
-signing-PIN session (ADR-005) -> only then ask hsm-service to sign. Each
-step can fail the whole request before the next one runs, and in
-particular before hsm-service is ever called — a broken chain or a wrong/
-locked PIN must never reach the HSM layer.
+`signing_requests.document_hash` — not what's actually signed, see the
+PAdES step below) -> fetch the certificate -> validate its chain ->
+resolve a signing-PIN session (ADR-005) -> only then produce the PAdES
+signature. Each step can fail the whole request before the next one
+runs, and in particular before hsm-service is ever called — a broken
+chain or a wrong/locked PIN must never reach the HSM layer.
 
 Idempotent via the same claim/replay helper certificate-service's
 mutating use cases use (app/application/services/idempotency.py):
 request_id comes from the client's X-Request-ID header (see
 RequestContextMiddleware) via get_context_values().
 
-No PKCS#7/CMS envelope yet — signature_format is always "RAW" (the raw
-signature bytes hsm-service returns). Building a real PKCS#7/CAdES/PAdES
-package is follow-up work, not a silent gap: the `signatures` table's
-signature_format column already has a RAW option for exactly this
-reason.
+Real PAdES-B signing (signing-plan.md point 1) via PAdESSigner —
+signature_format is "PAdES-B", not "RAW": the artifact is now the
+complete signed PDF (PyHankoPAdESSigner), not a detached signature over
+the whole file. The certificate chain embedded is leaf + intermediate
+(never the root — see IntermediateCertificateCache).
 """
 
 from __future__ import annotations
@@ -52,6 +52,7 @@ from app.domain.ports.input.SignDocumentUseCase import (
 from app.domain.ports.output.AuditEventDispatcher import AuditEventDispatcher
 from app.domain.ports.output.CertificateClient import CertificateClient
 from app.domain.ports.output.HSMClient import HSMClient
+from app.domain.ports.output.PAdESSigner import PAdESSigner
 from app.domain.ports.output.SigningPinVerifier import SigningPinVerifier
 from app.domain.ports.output.SignatureRecordRepository import (
     SignatureRecordRepository,
@@ -59,11 +60,15 @@ from app.domain.ports.output.SignatureRecordRepository import (
 from app.domain.ports.output.SigningSessionRepository import SigningSessionRepository
 from app.domain.valueobjects.IdentityContext import IdentityContext
 from app.domain.valueobjects.OwnerType import OwnerType
+from app.infrastructure.external.certificate.intermediate_cache import (
+    IntermediateCertificateCache,
+)
 
 _SERVICE_NAME = "signing-service"
 _RESOURCE_TYPE = "signature"
-_SIGNATURE_FORMAT = "RAW"
+_SIGNATURE_FORMAT = "PAdES-B"
 _HASH_ALGORITHM = "SHA256"
+_PDF_MAGIC = b"%PDF-"
 
 
 class SignDocumentUseCaseImpl(SignDocumentUseCase):
@@ -74,6 +79,8 @@ class SignDocumentUseCaseImpl(SignDocumentUseCase):
         session_repo: SigningSessionRepository,
         signature_repo: SignatureRecordRepository,
         hsm_client: HSMClient,
+        pades_signer: PAdESSigner,
+        intermediate_cache: IntermediateCertificateCache,
         idempotency_repo=None,
         audit_dispatcher: Optional[AuditEventDispatcher] = None,
         *,
@@ -85,6 +92,8 @@ class SignDocumentUseCaseImpl(SignDocumentUseCase):
         self._session_repo = session_repo
         self._signature_repo = signature_repo
         self._hsm_client = hsm_client
+        self._pades_signer = pades_signer
+        self._intermediate_cache = intermediate_cache
         self._idempotency_repo = idempotency_repo
         self._audit_dispatcher = audit_dispatcher
         self._session_ttl_minutes = session_ttl_minutes
@@ -106,6 +115,17 @@ class SignDocumentUseCaseImpl(SignDocumentUseCase):
         claimed = False
 
         try:
+            if not command.document.startswith(_PDF_MAGIC):
+                # Fail fast on malformed input, before claiming an
+                # idempotency key or spending a certificate-service/PIN
+                # round-trip on something that can never sign (point 2
+                # of signing-plan.md: never trust document_name for
+                # this, inspect the actual bytes).
+                raise ValidationError(
+                    "document_b64 does not decode to a PDF (missing %PDF- header)",
+                    field="document_b64",
+                )
+
             claim = await claim_idempotency_key(
                 self._idempotency_repo, str(tenant_id), request_id, "SIGN_DOCUMENT"
             )
@@ -180,12 +200,21 @@ class SignDocumentUseCaseImpl(SignDocumentUseCase):
                 session = issued.session
                 session_token = issued.token
 
-            # hsm-service hashes internally (CKM_SHA256_RSA_PKCS) — it must
-            # receive the raw document, never our own pre-computed digest
-            # (see HSMClient.sign_hash's docstring on the double-hashing bug
-            # this would otherwise reproduce).
-            signature_value = await self._hsm_client.sign_hash(
-                certificate.key_id, command.document, bearer_token
+            chain_pems = []
+            if certificate.issuer_certificate_id is not None:
+                chain_pems.append(
+                    await self._intermediate_cache.get_pem(
+                        certificate.issuer_certificate_id, bearer_token
+                    )
+                )
+
+            signed_document = await self._pades_signer.sign_pdf(
+                document=command.document,
+                leaf_cert_pem=certificate.pem,
+                chain_pems=chain_pems,
+                key_id=certificate.key_id,
+                hsm_client=self._hsm_client,
+                bearer_token=bearer_token,
             )
 
             session = await record_signature(self._session_repo, session)
@@ -199,7 +228,7 @@ class SignDocumentUseCaseImpl(SignDocumentUseCase):
                 document_hash=document_hash,
                 hash_algorithm=_HASH_ALGORITHM,
                 signature_id=uuid4(),
-                signature_value=signature_value,
+                signature_value=signed_document,
                 signature_format=_SIGNATURE_FORMAT,
                 signing_time=now,
                 document_name=command.document_name,

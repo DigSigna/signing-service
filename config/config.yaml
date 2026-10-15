@@ -32,6 +32,7 @@ hsm:
 certificate_service:
   base_url: "${CERTIFICATE_SERVICE_BASE_URL:}"
   timeout: "${CERTIFICATE_SERVICE_TIMEOUT:5s}"
+  chain_cache_ttl_hours: ${CERTIFICATE_CHAIN_CACHE_TTL_HOURS:24}
 
 signing_pin_session:
   ttl_minutes: ${SIGNING_PIN_SESSION_TTL_MINUTES:20}

@@ -2,7 +2,7 @@
 
 API REST en Python (FastAPI) para firma digital de documentos, multi-tenant, arquitectura hexagonal (ports & adapters). **No opera el HSM ni emite certificados directamente** — delega la operación criptográfica a [`hsm-service`](../hsm-service) vía HTTP y obtiene/valida el certificado del firmante vía [`certificate-service`](../certificate-service) (`GET /certificates/{id}`, `POST /internal/certificates/validate-chain`), reenviando el JWT del caller original (servicios stateless, sin token de servicio fijo).
 
-**Estado actual:** `POST /api/v1/sign` ya firma documentos end-to-end (PIN/sesión ADR-005, certificate-service, hsm-service, persistencia) — ver `CLAUDE.md`/`AGENTS.md`. Todavía no hay verificación de firmas, ni empaquetado PKCS#7/CMS (la firma devuelta es el valor crudo que entrega hsm-service).
+**Estado actual:** `POST /api/v1/sign` ya firma documentos end-to-end con PAdES-B real (PIN/sesión ADR-005, certificate-service, hsm-service, persistencia) — ver `CLAUDE.md`/`AGENTS.md` y `docs/signing-plan.md`. Todavía no hay verificación de firmas, ni soporte N-firmantes, ni integración TSA.
 
 ## Características
 
@@ -17,7 +17,7 @@ API REST en Python (FastAPI) para firma digital de documentos, multi-tenant, arq
 
 | Método | Ruta | Qué hace |
 |---|---|---|
-| `POST` | `/sign` | Firma un documento con un certificado propio (PIN o session_token vigente — ADR-005). `signature_format` siempre `RAW` hoy |
+| `POST` | `/sign` | Firma un documento (PDF) con un certificado propio (PIN o session_token vigente — ADR-005). Devuelve el PDF firmado completo (`signed_document_b64`), `signature_format` siempre `PAdES-B` hoy |
 | `GET` | `/health` | Health check (DB + Redis), sin autenticación |
 
 (La verificación de firmas se agregará acá cuando se implemente.)
@@ -58,6 +58,8 @@ cd ../signing-service && make up   # docker-compose.dev.yml: se une a hsm-networ
 curl http://localhost:8001/api/v1/health
 ```
 No corras `infra-up` (Opción A) y el stack de `hsm-service` (Opción B) al mismo tiempo: ambos publican MySQL en el puerto 3306 del host.
+
+Si cambiaste `requirements/`, un restart simple no alcanza — `Dockerfile.dev` instala dependencias en build time. Usá `docker-compose -f docker-compose.dev.yml up -d --build`.
 
 ## Docker
 ```bash

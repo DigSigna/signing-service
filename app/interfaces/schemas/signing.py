@@ -43,9 +43,13 @@ class SignDocumentResponse(BaseModel):
     signing_request_id: UUID
     signature_id: UUID
     certificate_id: UUID
-    document_hash: str = Field(..., description="SHA-256, hex")
-    signature_b64: str
-    signature_format: str = Field(..., description="RAW hoy; PKCS7/CMS a futuro")
+    document_hash: str = Field(..., description="SHA-256 del documento original, hex")
+    signed_document_b64: str = Field(
+        ...,
+        description="El PDF completo, con la firma PAdES-B embebida (incremental "
+        "update) — no una firma separada del documento",
+    )
+    signature_format: str = Field(..., description="PAdES-B hoy; XAdES/CAdES a futuro")
     signing_time: datetime
     session_token: Optional[str] = Field(
         None,
@@ -63,8 +67,8 @@ class SignDocumentResponse(BaseModel):
                 "document_hash": (
                     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                 ),
-                "signature_b64": "MIIB...",
-                "signature_format": "RAW",
+                "signed_document_b64": "JVBERi0xLjQK...",
+                "signature_format": "PAdES-B",
                 "signing_time": "2026-10-15T19:30:00+00:00",
                 "session_token": "9f2c...",
                 "session_expires_at": "2026-10-15T19:50:00+00:00",
@@ -79,7 +83,9 @@ class SignDocumentResponse(BaseModel):
             signature_id=result.signature_id,
             certificate_id=result.certificate_id,
             document_hash=result.document_hash,
-            signature_b64=base64.b64encode(result.signature_value).decode("utf-8"),
+            signed_document_b64=base64.b64encode(result.signature_value).decode(
+                "utf-8"
+            ),
             signature_format=result.signature_format,
             signing_time=result.signing_time,
             session_token=result.session_token,

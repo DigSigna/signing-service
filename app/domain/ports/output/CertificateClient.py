@@ -9,7 +9,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
 
@@ -24,6 +24,10 @@ class CertificateInfo:
     not_before: datetime
     not_after: datetime
     pem: str
+    # None only for a root CA (issues itself). Used to fetch the issuing
+    # CA's own PEM to embed in a PAdES signature's certificate chain —
+    # see IntermediateCertificateCache.
+    issuer_certificate_id: Optional[UUID] = None
 
 
 @dataclass

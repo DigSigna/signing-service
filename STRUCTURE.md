@@ -11,7 +11,7 @@ Ver `CLAUDE.md`/`AGENTS.md` ("Estructura real del repositorio") para la versión
 │   │   ├── entities/                  # AuditEvent, IdempotencyRecord, SignatureRecord, SigningSession, Tenant
 │   │   ├── events/                    # vacía hoy
 │   │   ├── exceptions/domain_errors.py
-│   │   ├── ports/{input,output}/      # interfaces ABC (incl. SignDocumentUseCase, CertificateClient)
+│   │   ├── ports/{input,output}/      # interfaces ABC (incl. SignDocumentUseCase, CertificateClient, PAdESSigner)
 │   │   └── valueobjects/
 │   ├── application/
 │   │   ├── dto/                       # vacía hoy
@@ -21,8 +21,9 @@ Ver `CLAUDE.md`/`AGENTS.md` ("Estructura real del repositorio") para la versión
 │   ├── infrastructure/
 │   │   ├── audit/
 │   │   ├── auth/
+│   │   ├── crypto/pyhanko_pades_signer.py   # PyHankoPAdESSigner (PAdES-B real)
 │   │   ├── database/{models,repositories,adapters}/
-│   │   └── external/{hsm,certificate,redis,audit,do_storage}/
+│   │   └── external/{hsm,certificate,redis,audit,do_storage}/   # certificate/ incl. intermediate_cache.py
 │   └── interfaces/
 │       ├── auth/permissions.py
 │       ├── dependencies.py
@@ -32,6 +33,7 @@ Ver `CLAUDE.md`/`AGENTS.md` ("Estructura real del repositorio") para la versión
 ├── tests/
 ├── scripts/{redis,sonar,docker}/
 ├── config/config.yaml
+├── docs/signing-plan.md               # plan de diseño (puntos 2-7 pendientes)
 ├── requirements/{base,dev}.txt
 ├── Dockerfile, Dockerfile.dev
 ├── docker-compose.yml, docker-compose.dev.yml

@@ -26,6 +26,8 @@ from app.interfaces.dependencies import (
     get_bearer_token,
     get_certificate_client,
     get_hsm_client,
+    get_intermediate_cache,
+    get_pades_signer,
     get_pin_verifier,
 )
 from app.interfaces.schemas.errors import ErrorResponse
@@ -79,6 +81,8 @@ def _build_use_case(request: Request, session: AsyncSession) -> SignDocumentUseC
         session_repo=SQLAlchemySigningSessionRepository(session),
         signature_repo=SQLAlchemySignatureRecordRepository(session),
         hsm_client=get_hsm_client(request),
+        pades_signer=get_pades_signer(request),
+        intermediate_cache=get_intermediate_cache(request),
         idempotency_repo=SQLAlchemyIdempotencyRepository(session),
         audit_dispatcher=get_audit_dispatcher(request),
         session_ttl_minutes=settings.SIGNING_PIN_SESSION_TTL_MINUTES,

@@ -17,6 +17,7 @@ from app.infrastructure.external.certificate.http_certificate_client import (
 CERT_ID = UUID(int=1)
 KEY_ID = UUID(int=2)
 TENANT_ID = UUID(int=3)
+ISSUER_CERT_ID = UUID(int=4)
 
 
 def _client_for(handler) -> httpx.AsyncClient:
@@ -35,6 +36,7 @@ def _certificate_json():
         "not_before": datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat(),
         "not_after": datetime(2027, 1, 1, tzinfo=timezone.utc).isoformat(),
         "pem": "-----BEGIN CERTIFICATE-----\nMII...\n-----END CERTIFICATE-----",
+        "issuer_certificate_id": str(ISSUER_CERT_ID),
     }
 
 
@@ -58,6 +60,26 @@ async def test_get_certificate_success_forwards_bearer_token():
         assert info.tenant_id == TENANT_ID
         assert info.is_ca is False
         assert info.status == "ACTIVE"
+        assert info.issuer_certificate_id == ISSUER_CERT_ID
+
+
+@pytest.mark.asyncio
+async def test_get_certificate_without_issuer_is_none():
+    """A root CA issues itself — issuer_certificate_id is absent/null."""
+
+    def handler(_request: httpx.Request):
+        data = _certificate_json()
+        data["issuer_certificate_id"] = None
+        return httpx.Response(200, json=data)
+
+    async with _client_for(handler) as client:
+        remote = RemoteCertificateClient(
+            RemoteCertificateClientConfig(base_url="http://cert-service"),
+            http_client=client,
+        )
+        info = await remote.get_certificate(CERT_ID, bearer_token="caller-jwt")
+
+        assert info.issuer_certificate_id is None
 
 
 @pytest.mark.asyncio

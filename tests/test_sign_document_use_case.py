@@ -21,6 +21,7 @@ from app.domain.ports.output.CertificateClient import (
     ChainValidationResult,
 )
 from app.domain.ports.output.HSMClient import HSMClient
+from app.domain.ports.output.PAdESSigner import PAdESSigner
 from app.domain.ports.output.SignatureRecordRepository import (
     SignatureRecordRepository,
 )
@@ -28,11 +29,15 @@ from app.domain.ports.output.SigningPinVerifier import SigningPinVerifier
 from app.domain.ports.output.SigningSessionRepository import SigningSessionRepository
 from app.domain.valueobjects.IdentityContext import IdentityContext
 from app.domain.valueobjects.OwnerType import OwnerType
+from app.infrastructure.external.certificate.intermediate_cache import (
+    IntermediateCertificateCache,
+)
 
 TENANT_ID = UUID(int=1)
 CERT_ID = UUID(int=2)
 KEY_ID = UUID(int=3)
 USER_ID = UUID(int=4)
+PDF_DOCUMENT = b"%PDF-1.4 fake test document"
 
 
 def _identity() -> IdentityContext:
@@ -147,19 +152,47 @@ class _FakeHSMClient(HSMClient):
         raise NotImplementedError
 
 
+class _FakePAdESSigner(PAdESSigner):
+    """Real PDF/PAdES correctness is covered end-to-end by
+    test_pyhanko_pades_signer.py — this fake keeps these tests focused
+    on SignDocumentUseCaseImpl's own orchestration (ordering, error
+    propagation, idempotency), without needing real PDF/cert fixtures
+    for every case."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def sign_pdf(
+        self, document, leaf_cert_pem, chain_pems, key_id, hsm_client, bearer_token
+    ):
+        self.calls.append(
+            (document, leaf_cert_pem, tuple(chain_pems), key_id, bearer_token)
+        )
+        # Still routes through hsm_client, same as the real adapter —
+        # lets tests assert the HSM was reached with the right key/token.
+        sig = await hsm_client.sign_hash(key_id, b"fake-signed-attrs", bearer_token)
+        return b"SIGNED-PDF:" + sig
+
+
 def _build_use_case(
     certificate_client=None,
     pin_verifier=None,
     session_repo=None,
     signature_repo=None,
     hsm_client=None,
+    pades_signer=None,
 ):
+    certificate_client = certificate_client or _FakeCertificateClient()
     return SignDocumentUseCaseImpl(
-        certificate_client=certificate_client or _FakeCertificateClient(),
+        certificate_client=certificate_client,
         pin_verifier=pin_verifier or _FakePinVerifier(),
         session_repo=session_repo or _FakeSessionRepository(),
         signature_repo=signature_repo or _FakeSignatureRepository(),
         hsm_client=hsm_client or _FakeHSMClient(),
+        pades_signer=pades_signer or _FakePAdESSigner(),
+        intermediate_cache=IntermediateCertificateCache(
+            certificate_client, ttl=timedelta(hours=1)
+        ),
         idempotency_repo=None,
         audit_dispatcher=None,
         session_ttl_minutes=20,
@@ -171,24 +204,29 @@ def _build_use_case(
 async def test_sign_with_pin_issues_new_session_and_signs():
     hsm = _FakeHSMClient(signature=b"sig-bytes")
     pin_verifier = _FakePinVerifier()
-    use_case = _build_use_case(hsm_client=hsm, pin_verifier=pin_verifier)
+    pades_signer = _FakePAdESSigner()
+    use_case = _build_use_case(
+        hsm_client=hsm, pin_verifier=pin_verifier, pades_signer=pades_signer
+    )
 
-    document = b"hello world"
     command = SignDocumentCommand(
-        certificate_id=CERT_ID, document=document, pin="193042"
+        certificate_id=CERT_ID, document=PDF_DOCUMENT, pin="193042"
     )
 
     result = await use_case.execute(command, _identity(), bearer_token="caller-jwt")
 
     assert result.certificate_id == CERT_ID
-    assert result.signature_value == b"sig-bytes"
-    assert result.signature_format == "RAW"
-    assert result.document_hash == hashlib.sha256(document).hexdigest()
+    assert result.signature_value == b"SIGNED-PDF:sig-bytes"
+    assert result.signature_format == "PAdES-B"
+    assert result.document_hash == hashlib.sha256(PDF_DOCUMENT).hexdigest()
     assert result.session_token  # a brand-new session token was issued
     assert result.session_expires_at is not None
 
-    # hsm-service received the raw document, never a pre-hashed digest.
-    assert hsm.calls == [(KEY_ID, document, "caller-jwt")]
+    # The use case hands the signer the original document (the signer
+    # itself decides what actually goes to hsm-service — see
+    # test_pyhanko_pades_signer.py for that boundary).
+    assert pades_signer.calls == [(PDF_DOCUMENT, "pem", (), KEY_ID, "caller-jwt")]
+    assert hsm.calls == [(KEY_ID, b"fake-signed-attrs", "caller-jwt")]
     assert pin_verifier.calls == [(CERT_ID, "193042", "caller-jwt")]
 
 
@@ -209,7 +247,7 @@ async def test_sign_with_valid_session_token_skips_pin():
 
     use_case = _build_use_case(session_repo=session_repo, pin_verifier=pin_verifier)
     command = SignDocumentCommand(
-        certificate_id=CERT_ID, document=b"doc", session_token="existing-token"
+        certificate_id=CERT_ID, document=PDF_DOCUMENT, session_token="existing-token"
     )
 
     result = await use_case.execute(command, _identity(), bearer_token="caller-jwt")
@@ -222,10 +260,65 @@ async def test_sign_with_valid_session_token_skips_pin():
 @pytest.mark.asyncio
 async def test_sign_without_pin_or_session_raises_validation_error():
     use_case = _build_use_case()
-    command = SignDocumentCommand(certificate_id=CERT_ID, document=b"doc")
+    command = SignDocumentCommand(certificate_id=CERT_ID, document=PDF_DOCUMENT)
 
     with pytest.raises(ValidationError):
         await use_case.execute(command, _identity(), bearer_token="caller-jwt")
+
+
+@pytest.mark.asyncio
+async def test_non_pdf_document_rejected_before_any_remote_call():
+    certificate_client = _FakeCertificateClient()
+    pin_verifier = _FakePinVerifier()
+    use_case = _build_use_case(
+        certificate_client=certificate_client, pin_verifier=pin_verifier
+    )
+    command = SignDocumentCommand(
+        certificate_id=CERT_ID, document=b"not a pdf at all", pin="193042"
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        await use_case.execute(command, _identity(), bearer_token="caller-jwt")
+
+    assert exc_info.value.field == "document_b64"
+    # Fails before spending a certificate-service or PIN round-trip.
+    assert certificate_client.calls == []
+    assert pin_verifier.calls == []
+
+
+@pytest.mark.asyncio
+async def test_fetches_and_forwards_intermediate_cert_when_present():
+    issuer_id = UUID(int=99)
+
+    class _CertClientWithIssuer(_FakeCertificateClient):
+        async def get_certificate(self, certificate_id, bearer_token):
+            self.calls.append(("get_certificate", certificate_id, bearer_token))
+            info = _certificate_info()
+            info.issuer_certificate_id = issuer_id
+            return info
+
+    certificate_client = _CertClientWithIssuer()
+    pades_signer = _FakePAdESSigner()
+    use_case = _build_use_case(
+        certificate_client=certificate_client, pades_signer=pades_signer
+    )
+    command = SignDocumentCommand(
+        certificate_id=CERT_ID, document=PDF_DOCUMENT, pin="193042"
+    )
+
+    await use_case.execute(command, _identity(), bearer_token="caller-jwt")
+
+    # get_certificate was called twice: once for the leaf (CERT_ID),
+    # once more by IntermediateCertificateCache for the issuer.
+    get_certificate_calls = [
+        c for c in certificate_client.calls if c[0] == "get_certificate"
+    ]
+    assert {c[1] for c in get_certificate_calls} == {CERT_ID, issuer_id}
+
+    # The intermediate's PEM (same fixture PEM, since _certificate_info
+    # is reused) was forwarded to the signer as part of chain_pems.
+    [(_doc, _leaf_pem, chain_pems, _key_id, _token)] = pades_signer.calls
+    assert chain_pems == ("pem",)
 
 
 @pytest.mark.asyncio
@@ -237,7 +330,9 @@ async def test_invalid_chain_raises_before_pin_or_hsm():
         hsm_client=hsm,
         pin_verifier=pin_verifier,
     )
-    command = SignDocumentCommand(certificate_id=CERT_ID, document=b"doc", pin="193042")
+    command = SignDocumentCommand(
+        certificate_id=CERT_ID, document=PDF_DOCUMENT, pin="193042"
+    )
 
     with pytest.raises(CertificateChainInvalidError):
         await use_case.execute(command, _identity(), bearer_token="caller-jwt")
@@ -252,7 +347,9 @@ async def test_pin_failure_never_reaches_hsm():
     use_case = _build_use_case(
         hsm_client=hsm, pin_verifier=_FakePinVerifier(should_fail=True)
     )
-    command = SignDocumentCommand(certificate_id=CERT_ID, document=b"doc", pin="000000")
+    command = SignDocumentCommand(
+        certificate_id=CERT_ID, document=PDF_DOCUMENT, pin="000000"
+    )
 
     with pytest.raises(SigningPinInvalidError):
         await use_case.execute(command, _identity(), bearer_token="caller-jwt")
@@ -264,7 +361,9 @@ async def test_pin_failure_never_reaches_hsm():
 async def test_signature_is_persisted_and_findable():
     signature_repo = _FakeSignatureRepository()
     use_case = _build_use_case(signature_repo=signature_repo)
-    command = SignDocumentCommand(certificate_id=CERT_ID, document=b"doc", pin="193042")
+    command = SignDocumentCommand(
+        certificate_id=CERT_ID, document=PDF_DOCUMENT, pin="193042"
+    )
 
     result = await use_case.execute(command, _identity(), bearer_token="caller-jwt")
 

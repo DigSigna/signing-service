@@ -179,6 +179,16 @@ class Settings(BaseSettings):
             "CERTIFICATE_SERVICE_TIMEOUT", AliasPath("certificate_service", "timeout")
         ),
     )
+    CERTIFICATE_CHAIN_CACHE_TTL_HOURS: int = Field(
+        default=24,
+        validation_alias=AliasChoices(
+            "CERTIFICATE_CHAIN_CACHE_TTL_HOURS",
+            AliasPath("certificate_service", "chain_cache_ttl_hours"),
+        ),
+        description="How long an intermediate CA's PEM (fetched to embed in a "
+        "PAdES signature's chain) is cached before being re-fetched. Long by "
+        "design — it only changes if the CA itself rotates.",
+    )
 
     # Signing-PIN session grace window (ADR-005)
     SIGNING_PIN_SESSION_TTL_MINUTES: int = Field(

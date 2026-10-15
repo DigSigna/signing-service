@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from fastapi import FastAPI
 from app.core.config import get_settings
 from app.core.logger import get_logger
@@ -22,6 +24,10 @@ from app.infrastructure.external.certificate.http_certificate_client import (
     RemoteCertificateClient,
     RemoteCertificateClientConfig,
 )
+from app.infrastructure.external.certificate.intermediate_cache import (
+    IntermediateCertificateCache,
+)
+from app.infrastructure.crypto.pyhanko_pades_signer import PyHankoPAdESSigner
 from app.infrastructure.external.redis import TokenCache, TokenCacheConfig
 from app.infrastructure.audit.audit_worker import AuditWorker
 from app.infrastructure.audit.factory import new_audit_recorder
@@ -136,6 +142,10 @@ async def startup_event():
                 timeout_seconds=certificate_timeout,
             )
         )
+        app.state.intermediate_cache = IntermediateCertificateCache(
+            app.state.certificate_client,
+            ttl=timedelta(hours=settings.CERTIFICATE_CHAIN_CACHE_TTL_HOURS),
+        )
         logger.info(
             "certificate-service clients initialized", action="certificate_startup"
         )
@@ -144,6 +154,9 @@ async def startup_event():
             "CERTIFICATE_SERVICE_BASE_URL not set — /sign will fail until it is",
             action="certificate_startup_skipped",
         )
+
+    app.state.pades_signer = PyHankoPAdESSigner()
+    logger.info("PAdES signer initialized", action="pades_signer_startup")
 
     if settings.AUDIT_ENABLED:
         audit_session = AsyncSessionLocal()

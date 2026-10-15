@@ -22,6 +22,10 @@ class SignatureRecord:
     document_hash: str  # SHA-256, hex (64 chars) — signing_requests.document_hash
     hash_algorithm: str
     signature_id: UUID  # signatures.id
+    # The complete signed PDF (PAdES-B: original document + an
+    # incremental update embedding the CMS signature), not a detached
+    # signature blob — see PAdESSigner. signatures.signature_value is
+    # LONGBLOB (migration 024) for exactly this reason.
     signature_value: bytes
     signature_format: str
     signing_time: datetime

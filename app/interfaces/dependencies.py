@@ -17,7 +17,11 @@ from starlette.status import HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERRO
 from app.domain.ports.output.AuditEventDispatcher import AuditEventDispatcher
 from app.domain.ports.output.CertificateClient import CertificateClient
 from app.domain.ports.output.HSMClient import HSMClient
+from app.domain.ports.output.PAdESSigner import PAdESSigner
 from app.domain.ports.output.SigningPinVerifier import SigningPinVerifier
+from app.infrastructure.external.certificate.intermediate_cache import (
+    IntermediateCertificateCache,
+)
 
 
 def get_bearer_token(request: Request) -> str:
@@ -65,3 +69,23 @@ def get_pin_verifier(request: Request) -> SigningPinVerifier:
             detail="Signing PIN verifier not initialized",
         )
     return verifier
+
+
+def get_intermediate_cache(request: Request) -> IntermediateCertificateCache:
+    cache = getattr(request.app.state, "intermediate_cache", None)
+    if cache is None:
+        raise HTTPException(
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Intermediate certificate cache not initialized",
+        )
+    return cache
+
+
+def get_pades_signer(request: Request) -> PAdESSigner:
+    signer = getattr(request.app.state, "pades_signer", None)
+    if signer is None:
+        raise HTTPException(
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="PAdES signer not initialized",
+        )
+    return signer

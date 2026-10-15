@@ -71,6 +71,11 @@ class RemoteCertificateClient(CertificateClient):
                 not_before=datetime.fromisoformat(data["not_before"]),
                 not_after=datetime.fromisoformat(data["not_after"]),
                 pem=data["pem"],
+                issuer_certificate_id=(
+                    UUID(data["issuer_certificate_id"])
+                    if data.get("issuer_certificate_id")
+                    else None
+                ),
             )
         except (KeyError, ValueError) as exc:
             raise CertificateServiceUnavailableError(
