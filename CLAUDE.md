@@ -6,7 +6,10 @@ Instrucciones para Claude Code trabajando en este repositorio. Este archivo es e
 
 Este repositorio nació (2026-10-14) como una copia literal de `certificate-service` — mismo stack, misma arquitectura hexagonal — para no reconstruir desde cero la infraestructura que ambos servicios comparten (JWT/JWKS, auditoría híbrida, contexto de request, cliente HSM). Esa copia ya fue **recortada**: todo lo específico del dominio de certificados/CA se eliminó; solo quedó la infraestructura genérica. Ver el primer commit del repo (`chore: baseline copy from certificate-service`) si necesitás comparar contra el original sin recortar.
 
-**Por eso, a diferencia de `hsm-service/CLAUDE.md` y `certificate-service/CLAUDE.md`, esta sección no tiene todavía una lista de "hallazgos ya identificados que no debes repetir" propia** — este repo no tiene historia propia más allá de hoy. Los patrones de seguridad de esos dos documentos (mismo espíritu, Go o Python según el servicio) aplican igual acá; si encontrás un hallazgo nuevo de la misma clase (secreto hardcodeado, excepción silenciada, stub vacío asumido como implementado), documentalo acá siguiendo el mismo formato que usan ellos, no lo dejes sin registrar.
+Los patrones de seguridad de `hsm-service/CLAUDE.md` y `certificate-service/CLAUDE.md` (mismo espíritu, Go o Python según el servicio) aplican igual acá.
+
+**Hallazgos ya identificados que no debes repetir:**
+- `DomainError.to_dict()` (`app/domain/exceptions/domain_errors.py`, copiado tal cual de `certificate-service`) serializaba cualquier campo `datetime` de una subclase (p. ej. `SigningPinLockedError.locked_until`, agregado en esta misma tarea) sin convertirlo a string — `ErrorHandlingMiddleware` pasa ese dict directo a `JSONResponse(content=...)`, que llama a `json.dumps()` sin encoder para `datetime` y lanza `TypeError`. En la práctica, cualquier error de dominio que cargue un campo `datetime` nunca llegaría al caller como la respuesta HTTP limpia que se esperaba, sino como un error no manejado. **Ya corregido** (acá y en `certificate-service`, donde se encontró primero) con un helper `_jsonable()` que hace `.isoformat()` en cualquier `datetime` antes de meterlo en `details` — si agregás un nuevo campo `datetime` a una subclase de `DomainError`, no necesitás hacer nada especial, pero si agregás algún otro tipo no serializable por `json.dumps` (p. ej. `UUID`, `Decimal`), extendé `_jsonable()`, no asumas que `to_dict()` ya lo cubre.
 
 **Qué se mantuvo de la copia (infraestructura genérica, ya wireada y funcionando):**
 - `app/core/` completo: config (Pydantic Settings + YAML + expansión de env vars), logger JSON estructurado, request context (contextvars).
@@ -17,7 +20,14 @@ Este repositorio nació (2026-10-14) como una copia literal de `certificate-serv
 - Idempotencia genérica: `IdempotencyRepository`/`IdempotencyRecord` + `claim_idempotency_key`/`finish_idempotency_claim` (`app/application/services/idempotency.py`) — para envolver cualquier caso de uso mutante futuro que acepte un `request_id` del cliente.
 - `DomainError` (jerarquía base de dataclasses) + subclases genéricas (`ValidationError`, `NotFoundError`, `AuthorizationError`, `ConfigurationError`, `DuplicateRequestError`, `TenantRequiredError`, `OwnerIdRequiredError`, `InvalidOwnerTypeError`, `HsmError`/`HsmConnectionError`/`HsmOperationError`, `AuditError`/`AuditDispatchError`/`AuditStorageError`) — consumida por `ErrorHandlingMiddleware`.
 - `require_admin`/`get_identity_context` (`app/interfaces/auth/permissions.py`) como dependencia de FastAPI, no middleware global.
-- `/health` (DB + Redis, sin auth) — el único endpoint de negocio wireado hoy.
+- `/health` (DB + Redis, sin auth) — el único endpoint HTTP wireado hoy.
+
+**Qué se agregó, propio de este servicio (ADR-005 — signing PIN, ver `platform-docs/architecture/ADR/ADR-004-...md`, numerado ADR-005 en su propio título):** el PIN en sí vive en `certificate-service` (dueño de la fila `certificates`); este servicio solo lo consume y además posee la ventana de gracia que el ADR le asigna explícitamente:
+- `SigningPinVerifier` (puerto) + `RemoteSigningPinVerifier` (`app/infrastructure/external/certificate/http_pin_verifier.py`) — llama a `POST {CERTIFICATE_SERVICE_BASE_URL}/internal/certificates/{id}/verify-pin` reenviando el JWT del caller, y traduce los códigos de error de certificate-service (`SIGNING_PIN_INVALID`/`_LOCKED`/`_NOT_SET`/`_NOT_APPLICABLE`) a los `DomainError` locales equivalentes (`app/domain/exceptions/domain_errors.py`, sección "Signing PIN").
+- `SigningSession` (entidad) + `SigningSessionRepository` (puerto) + `SQLAlchemySigningSessionRepository`, sobre la tabla propia `signing_pin_sessions` (migración 023 del repo `migrations`, mismo esquema compartido) — la ventana de gracia: tras un PIN verificado con éxito, una sesión permite firmar más documentos sin re-pedir el PIN, acotada por `expires_at` y/o `max_signatures`.
+- `app/application/services/signing_pin_session.py`: `try_resume_session()` (reusa una sesión vigente, sin consumir nada), `start_session()` (verifica el PIN vía `SigningPinVerifier` y emite una sesión nueva) y `record_signature()` (consume una firma del cupo — se llama solo después de que hsm-service realmente firmó, nunca antes, para que un intento fallido no gaste cupo). Pensadas para ser compuestas por el futuro caso de uso de `/sign`, que todavía no existe (ver abajo).
+- `CERTIFICATE_SERVICE_BASE_URL`/`CERTIFICATE_SERVICE_TIMEOUT` y `SIGNING_PIN_SESSION_TTL_MINUTES`/`SIGNING_PIN_SESSION_MAX_SIGNATURES` (`app/core/config.py`, `config/config.yaml`) — este último es `0` = sin límite de firmas (solo manda `expires_at`).
+- El token de sesión es generado con `secrets.token_urlsafe` (nunca `random`) y solo se persiste su hash SHA-256 (`session_token_hash`) — el token crudo se devuelve una sola vez al caller y nunca se guarda en ningún lado, mismo razonamiento que `certificates.pin_hash`.
 
 **Qué se eliminó (específico de certificados/CA, no aplica a firma de documentos):** entidad `Certificate` y sus value objects X.509 (`DistinguishedName`, `SerialNumber`, `RevocationInfo`, `KeyUsage`, `ExtendedKeyUsage`, `SubjectAlternativeNames`, `ValidityPeriod`, `CertificateStatus`), los casos de uso de emisión/revocación/listado/validación de cadena, `TenantCARepository`/`CertificateRepository` y sus adaptadores SQLAlchemy, `x509_builder.py`/`x509_verifier.py`/`hsm_backed_key.py` (construcción de certificados X.509 firmados por el HSM), las rutas `cas.py`/`certificates.py`/`internal_certificates.py` y sus schemas, el proxy público `/hsm/*` (este servicio llama a `RemoteHSMClient` internamente, no necesita exponer gestión de claves), y los errores de dominio específicos de CA/certificado. `Algorithm`/`KeyPurpose` se mantuvieron — son atributos genéricos de clave del `HSMClient`, no de X.509.
 
@@ -25,7 +35,7 @@ Este repositorio nació (2026-10-14) como una copia literal de `certificate-serv
 
 Signing Service: API REST en Python (FastAPI) para firma digital de documentos, multi-tenant, arquitectura hexagonal. Según el flujo documentado en `platform-docs` (DLT-015, `architecture/sprint-1.0/diagrams/flow/signatures/`): recibe un documento, calcula su hash, obtiene y valida el certificado del firmante vía `certificate-service` (`GET /certificates/{id}` + `POST /internal/certificates/validate-chain`), pide a `hsm-service` que firme el hash, construye el paquete de firma (PKCS#7/PAdES) y lo embebe en el documento; también valida firmas existentes. **No opera el HSM ni emite certificados directamente** — delega ambas cosas a sus servicios hermanos.
 
-**Estado real del repositorio (no asumas que hay más de lo que hay):** hoy **no hay ningún caso de uso de firma/verificación implementado ni wireado**. `app/application/{use_cases,dto,mappers}/` están vacíos, `app/domain/events/` e `app/infrastructure/external/do_storage/` existen como carpetas vacías (ni `__init__.py`), y el único router registrado en `app/main.py` es `/health`. Lo que sí existe y funciona es la infraestructura listada arriba — construir la lógica de firma es el trabajo pendiente, no algo ya hecho que falte conectar.
+**Estado real del repositorio (no asumas que hay más de lo que hay):** hoy **no hay ningún caso de uso de firma/verificación implementado ni wireado como endpoint HTTP**. `app/application/use_cases/`, `app/application/dto/` y `app/application/mappers/` están vacíos, `app/domain/events/` e `app/infrastructure/external/do_storage/` existen como carpetas vacías (ni `__init__.py`), y el único router registrado en `app/main.py` es `/health`. Lo que sí existe y funciona, con tests, es toda la infraestructura listada arriba — incluida la pieza de signing PIN (ADR-005) — pero nada de eso está todavía detrás de una ruta `/api/v1/sign` real. Construir ese caso de uso (hashear el documento, resolver PIN/sesión, pedirle a `hsm-service` que firme, armar el paquete de firma) es el trabajo pendiente, no algo ya hecho que falte conectar.
 
 Stack: Python 3.11, FastAPI, Pydantic v2 (`pydantic-settings`), SQLAlchemy 2.0 async (`asyncmy`), Redis (cache de tokens JWT), `cryptography` (usada hoy solo por `InMemoryHSMClient`/tests), PyJWT, Uvicorn.
 
@@ -37,31 +47,32 @@ Stack: Python 3.11, FastAPI, Pydantic v2 (`pydantic-settings`), SQLAlchemy 2.0 a
 app/
   core/                                 # config, logger JSON, request context — igual a certificate-service/hsm-service
   domain/
-    entities/                           # AuditEvent, IdempotencyRecord, Tenant (Pydantic) — sin Certificate
+    entities/                           # AuditEvent, IdempotencyRecord, SigningSession, Tenant (Pydantic) — sin Certificate
     events/                             # carpeta vacía hoy (ni __init__.py)
-    exceptions/domain_errors.py         # jerarquía de excepciones genérica (sin subclases de CA/certificado)
-    ports/{input,output}/               # AuditRecorder; AuditEventDispatcher/AuditStorage/AuditTransporter, HSMClient, IdempotencyRepository, JWTKeyProvider/JWTValidator, TenantRepository
+    exceptions/domain_errors.py         # jerarquía de excepciones genérica + Signing PIN (sin subclases de CA/certificado)
+    ports/{input,output}/               # AuditRecorder; AuditEventDispatcher/AuditStorage/AuditTransporter, HSMClient, IdempotencyRepository, JWTKeyProvider/JWTValidator, SigningPinVerifier, SigningSessionRepository, TenantRepository
     valueobjects/                       # ActorType, Algorithm, AuditData, AuditStrategy, IdentityContext, KeyPurpose, Owner(Type), PlanType, TenantMode, TenantStatus
   application/
-    dto/, mappers/, use_cases/          # VACÍOS hoy — acá va la lógica de firma/verificación que falta
-    services/                           # idempotency.py (claim/finish genérico), audit_helpers.py (build_audit_data, parametrizado por service_name/resource_type)
+    dto/, mappers/, use_cases/          # VACÍOS hoy — acá va el caso de uso de firma/verificación que falta
+    services/                           # idempotency.py, audit_helpers.py, signing_pin_session.py (try_resume_session/start_session/record_signature — ADR-005)
   infrastructure/
     audit/                              # audit_worker.py + factory.py + hybrid_processor.py — ya wireado si AUDIT_ENABLED
     crypto/                             # no existe todavía (se eliminó junto con x509_builder/verifier) — crealo cuando se implemente la firma real
-    database/                           # sesión SQLAlchemy async; models/{base,tenant,audit_event,idempotency_key}.py; repositories/{tenant_repository,audit_repository,idempotency_repository}.py; adapters/audited_tenant_repository.py
+    database/                           # sesión SQLAlchemy async; models/{base,tenant,audit_event,idempotency_key,signing_pin_session}.py; repositories/{tenant_repository,audit_repository,idempotency_repository,signing_pin_session_repository}.py; adapters/audited_tenant_repository.py
     external/hsm/                       # factory + RemoteHSMClient + InMemoryHSMClient
+    external/certificate/http_pin_verifier.py  # RemoteSigningPinVerifier — llama al /internal/.../verify-pin de certificate-service
     external/redis/                     # cache de tokens JWT
     external/audit/http_audit_transporter.py
     external/do_storage/                # carpeta vacía hoy (ni __init__.py)
   interfaces/
     auth/permissions.py                 # require_admin / get_identity_context
     middleware/                         # auth, logging, error_handling, request_context — las 4 ya registradas en main.py
-    routes/health.py                    # único endpoint de negocio wireado hoy
+    routes/health.py                    # único endpoint HTTP wireado hoy
     schemas/                            # errors.py, health.py — sin schemas de certificado/CA
 config/config.yaml                      # config base (fusiona con .env y env vars vía pydantic-settings)
 scripts/redis/, scripts/sonar/, scripts/docker/
 bruno/                                  # colección de requests manuales (si existe)
-tests/                                  # test_health, test_hsm_client, test_remote_hsm_client, test_idempotency_service, test_permissions, test_domain_errors — todos de infraestructura, cero de negocio (no hay negocio todavía)
+tests/                                  # test_health, test_hsm_client, test_remote_hsm_client, test_idempotency_service, test_permissions, test_domain_errors, test_remote_signing_pin_verifier, test_signing_pin_session_service — todos de infraestructura, cero de un caso de uso HTTP real (no hay negocio todavía)
 ```
 
 ## Comandos esenciales
@@ -143,4 +154,4 @@ Mismo espíritu que `hsm-service`/`certificate-service`, adaptado a este servici
 
 - Si tu cambio toca endpoints HTTP o casos de uso, agregá o actualizá un test que valide el comportamiento esperado.
 - Si tu cambio afecta la estructura del proyecto o los comandos esenciales, actualizá este archivo y `AGENTS.md` juntos — no dejes que diverjan.
-- Si encontrás un hallazgo nuevo del mismo tipo que los ya documentados en `hsm-service`/`certificate-service` (secreto hardcodeado, excepción silenciada, stub vacío asumido como implementado), es razonable corregirlo en el mismo PR si es pequeño y aislado, o anotarlo en la sección "⚠️ Antes de empezar" de este archivo si es mayor y fuera del alcance de la tarea actual — esa sección todavía no tiene hallazgos propios, pero debería empezar a tenerlos en vez de quedar vacía para siempre.
+- Si encontrás un hallazgo nuevo del mismo tipo que los ya documentados arriba o en `hsm-service`/`certificate-service` (secreto hardcodeado, excepción silenciada, stub vacío asumido como implementado), es razonable corregirlo en el mismo PR si es pequeño y aislado, o anotarlo en la sección "⚠️ Antes de empezar" si es mayor y fuera del alcance de la tarea actual.

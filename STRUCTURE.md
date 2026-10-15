@@ -8,7 +8,7 @@ Ver `CLAUDE.md`/`AGENTS.md` ("Estructura real del repositorio") para la versión
 │   ├── main.py
 │   ├── core/                          # config, logger, request context
 │   ├── domain/
-│   │   ├── entities/                  # AuditEvent, IdempotencyRecord, Tenant
+│   │   ├── entities/                  # AuditEvent, IdempotencyRecord, SigningSession, Tenant
 │   │   ├── events/                    # vacía hoy
 │   │   ├── exceptions/domain_errors.py
 │   │   ├── ports/{input,output}/      # interfaces ABC
@@ -16,13 +16,13 @@ Ver `CLAUDE.md`/`AGENTS.md` ("Estructura real del repositorio") para la versión
 │   ├── application/
 │   │   ├── dto/                       # vacía hoy
 │   │   ├── mappers/                   # vacía hoy
-│   │   ├── services/                  # idempotency.py, audit_helpers.py
+│   │   ├── services/                  # idempotency.py, audit_helpers.py, signing_pin_session.py
 │   │   └── use_cases/                 # vacía hoy
 │   ├── infrastructure/
 │   │   ├── audit/
 │   │   ├── auth/
 │   │   ├── database/{models,repositories,adapters}/
-│   │   └── external/{hsm,redis,audit,do_storage}/
+│   │   └── external/{hsm,certificate,redis,audit,do_storage}/
 │   └── interfaces/
 │       ├── auth/permissions.py
 │       ├── dependencies.py

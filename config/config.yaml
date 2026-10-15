@@ -29,6 +29,14 @@ hsm:
   session_timeout: "${HSM_SESSION_TIMEOUT:30s}"
   max_sessions: ${HSM_MAX_SESSIONS:10}
 
+certificate_service:
+  base_url: "${CERTIFICATE_SERVICE_BASE_URL:}"
+  timeout: "${CERTIFICATE_SERVICE_TIMEOUT:5s}"
+
+signing_pin_session:
+  ttl_minutes: ${SIGNING_PIN_SESSION_TTL_MINUTES:20}
+  max_signatures: ${SIGNING_PIN_SESSION_MAX_SIGNATURES:0}
+
 audit:
   enabled: ${AUDIT_ENABLED:true}
   strategy: "${AUDIT_STRATEGY:hybrid}"

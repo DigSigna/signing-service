@@ -165,6 +165,38 @@ class Settings(BaseSettings):
         ),
     )
 
+    # certificate-service (verify-pin, ADR-005)
+    CERTIFICATE_SERVICE_BASE_URL: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "CERTIFICATE_SERVICE_BASE_URL",
+            AliasPath("certificate_service", "base_url"),
+        ),
+    )
+    CERTIFICATE_SERVICE_TIMEOUT: str = Field(
+        default="5s",
+        validation_alias=AliasChoices(
+            "CERTIFICATE_SERVICE_TIMEOUT", AliasPath("certificate_service", "timeout")
+        ),
+    )
+
+    # Signing-PIN session grace window (ADR-005)
+    SIGNING_PIN_SESSION_TTL_MINUTES: int = Field(
+        default=20,
+        validation_alias=AliasChoices(
+            "SIGNING_PIN_SESSION_TTL_MINUTES",
+            AliasPath("signing_pin_session", "ttl_minutes"),
+        ),
+    )
+    SIGNING_PIN_SESSION_MAX_SIGNATURES: int = Field(
+        default=0,
+        validation_alias=AliasChoices(
+            "SIGNING_PIN_SESSION_MAX_SIGNATURES",
+            AliasPath("signing_pin_session", "max_signatures"),
+        ),
+        description="0 = unbounded (only expires_at limits the session)",
+    )
+
     # Audit
     AUDIT_ENABLED: bool = Field(
         default=True,

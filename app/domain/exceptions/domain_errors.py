@@ -22,7 +22,14 @@ aplanarla a un solo tipo. Lo que SÍ se porta explícitamente del archivo Go:
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, replace
+from datetime import datetime
 from typing import Any, ClassVar, Dict, Optional
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
 
 
 @dataclass
@@ -43,14 +50,17 @@ class DomainError(Exception):
         return replace(self, details={**self.details, key: value})
 
     def to_dict(self) -> Dict[str, Any]:
-        """Merges every subclass-specific field (e.g. CertificateChain
-        InvalidError.broken_at, ValidationError.field, NotFoundError.
+        """Merges every subclass-specific field (e.g. NotFoundError.
         entity_id) into `details` — previously only the base `message`/
         `details` were ever serialized, so every subclass's own extra
         field was silently dropped from the HTTP response, defeating its
-        purpose (a caller could never actually learn broken_at)."""
+        purpose. datetime fields (e.g. SigningPinLockedError.locked_until)
+        are isoformat()-ted: JSONResponse.render() calls plain json.dumps()
+        with no custom default, which raises TypeError on a raw datetime —
+        found and fixed the same way in certificate-service, where this
+        file was copied from."""
         extra = {
-            f.name: getattr(self, f.name)
+            f.name: _jsonable(getattr(self, f.name))
             for f in fields(self)
             if f.name not in ("message", "details")
             and getattr(self, f.name) is not None
@@ -158,6 +168,75 @@ class InvalidOwnerTypeError(DomainError):
 
     code: ClassVar[str] = "INVALID_OWNER_TYPE"
     http_status: ClassVar[int] = 400
+
+
+# ---------------------------------------------------------------------------
+# Signing PIN (ADR-005) — el PIN en sí vive en certificate-service (dueño
+# de la fila `certificates`); este servicio solo consume su endpoint
+# interno /internal/certificates/{id}/verify-pin y traduce sus respuestas
+# de error a estos equivalentes locales, para que ErrorHandlingMiddleware
+# los mapee igual que cualquier otro DomainError propio. No incluye
+# SigningPinAlreadySetError (set/reset de PIN no es responsabilidad de
+# signing-service).
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SigningPinError(DomainError):
+    """Base class for signing-PIN errors surfaced via certificate-service's
+    verify-pin endpoint."""
+
+    code: ClassVar[str] = "SIGNING_PIN_ERROR"
+    http_status: ClassVar[int] = 400
+
+
+@dataclass
+class SigningPinNotApplicableError(SigningPinError):
+    """Raised when verification is attempted against a CA certificate."""
+
+    code: ClassVar[str] = "SIGNING_PIN_NOT_APPLICABLE"
+    http_status: ClassVar[int] = 400
+
+
+@dataclass
+class SigningPinNotSetError(SigningPinError):
+    """Raised when verification is attempted before any PIN was ever set."""
+
+    code: ClassVar[str] = "SIGNING_PIN_NOT_SET"
+    http_status: ClassVar[int] = 409
+
+
+@dataclass
+class SigningPinInvalidError(SigningPinError):
+    """Raised when the PIN is wrong — carries how many attempts remain
+    before lockout."""
+
+    code: ClassVar[str] = "SIGNING_PIN_INVALID"
+    http_status: ClassVar[int] = 400
+
+    remaining_attempts: Optional[int] = None
+
+
+@dataclass
+class SigningPinLockedError(SigningPinError):
+    """Raised when verification is attempted during an active lockout
+    window — 423, mirroring certificate-service's own choice."""
+
+    code: ClassVar[str] = "SIGNING_PIN_LOCKED"
+    http_status: ClassVar[int] = 423
+
+    locked_until: Optional[datetime] = None
+
+
+@dataclass
+class SigningPinVerificationUnavailableError(SigningPinError):
+    """Raised when certificate-service is unreachable, times out, or
+    returns a response this service can't parse — distinct from the
+    pass/fail outcomes above, which all mean certificate-service was
+    reached and answered."""
+
+    code: ClassVar[str] = "SIGNING_PIN_VERIFICATION_UNAVAILABLE"
+    http_status: ClassVar[int] = 502
 
 
 # ---------------------------------------------------------------------------
