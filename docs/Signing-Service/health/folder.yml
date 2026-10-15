@@ -1,0 +1,6 @@
+info:
+  name: health
+  type: folder
+
+request:
+  auth: inherit

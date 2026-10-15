@@ -240,6 +240,35 @@ class SigningPinVerificationUnavailableError(SigningPinError):
 
 
 # ---------------------------------------------------------------------------
+# Certificate lookup/chain validation (CertificateClient, consumed by the
+# /sign use case before it ever asks hsm-service to sign)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CertificateServiceUnavailableError(DomainError):
+    """Raised when certificate-service is unreachable, times out, or
+    returns a response this service can't parse, for either
+    get_certificate or validate_chain."""
+
+    code: ClassVar[str] = "CERTIFICATE_SERVICE_UNAVAILABLE"
+    http_status: ClassVar[int] = 502
+
+
+@dataclass
+class CertificateChainInvalidError(DomainError):
+    """Raised by the /sign use case when CertificateClient.validate_chain
+    returns valid=False — expired/revoked/broken-signature somewhere
+    between the leaf and the root. certificate-service itself doesn't
+    raise this (it returns {valid: false, chain: [...]} as a normal 200
+    response); this service is the one that decides a broken chain means
+    signing must not proceed."""
+
+    code: ClassVar[str] = "CERTIFICATE_CHAIN_INVALID"
+    http_status: ClassVar[int] = 422
+
+
+# ---------------------------------------------------------------------------
 # HSM (vía RemoteHSMClient — este servicio nunca toca el HSM directamente)
 # ---------------------------------------------------------------------------
 

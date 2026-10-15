@@ -3,6 +3,7 @@ from app.core.config import get_settings
 from app.core.logger import get_logger
 from app.infrastructure.database.session import AsyncSessionLocal, close_db, init_db
 from app.interfaces.routes.health import router as health_router
+from app.interfaces.routes.signing import router as signing_router
 from app.interfaces.middleware.logging import LoggingMiddleware
 from app.interfaces.middleware.error_handling import ErrorHandlingMiddleware
 from app.interfaces.middleware.request_context import RequestContextMiddleware
@@ -13,6 +14,14 @@ from app.infrastructure.auth.key_manager_adapter import (
 )
 from app.infrastructure.auth.validator_adapter import JWTValidatorAdapter
 from app.infrastructure.external.hsm import create_hsm_client
+from app.infrastructure.external.certificate.http_pin_verifier import (
+    RemoteSigningPinVerifier,
+    RemoteSigningPinVerifierConfig,
+)
+from app.infrastructure.external.certificate.http_certificate_client import (
+    RemoteCertificateClient,
+    RemoteCertificateClientConfig,
+)
 from app.infrastructure.external.redis import TokenCache, TokenCacheConfig
 from app.infrastructure.audit.audit_worker import AuditWorker
 from app.infrastructure.audit.factory import new_audit_recorder
@@ -79,8 +88,7 @@ app.add_middleware(AuthMiddleware)
 
 # Routers
 app.include_router(health_router, prefix=settings.API_V1_STR, tags=["health"])
-# Rutas de negocio (firma/verificación) todavía no implementadas — ver
-# app/application/{use_cases,dto,mappers}/, hoy vacíos.
+app.include_router(signing_router, prefix=settings.API_V1_STR, tags=["signing"])
 
 
 @app.on_event("startup")
@@ -109,6 +117,33 @@ async def startup_event():
 
     app.state.hsm_client = create_hsm_client(settings)
     logger.info("HSM client initialized", action="hsm_startup")
+
+    # None (not a crashed startup) when unset: lets /health and other
+    # routes still come up in the standalone dev topology (HSM_BACKEND=
+    # in_memory, no certificate-service running at all) — /sign fails
+    # clearly via get_certificate_client/get_pin_verifier instead.
+    if settings.CERTIFICATE_SERVICE_BASE_URL:
+        certificate_timeout = _parse_seconds(settings.CERTIFICATE_SERVICE_TIMEOUT, 5.0)
+        app.state.certificate_client = RemoteCertificateClient(
+            RemoteCertificateClientConfig(
+                base_url=settings.CERTIFICATE_SERVICE_BASE_URL,
+                timeout_seconds=certificate_timeout,
+            )
+        )
+        app.state.pin_verifier = RemoteSigningPinVerifier(
+            RemoteSigningPinVerifierConfig(
+                base_url=settings.CERTIFICATE_SERVICE_BASE_URL,
+                timeout_seconds=certificate_timeout,
+            )
+        )
+        logger.info(
+            "certificate-service clients initialized", action="certificate_startup"
+        )
+    else:
+        logger.warning(
+            "CERTIFICATE_SERVICE_BASE_URL not set — /sign will fail until it is",
+            action="certificate_startup_skipped",
+        )
 
     if settings.AUDIT_ENABLED:
         audit_session = AsyncSessionLocal()

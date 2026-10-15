@@ -2,7 +2,7 @@
 
 API REST en Python (FastAPI) para firma digital de documentos, multi-tenant, arquitectura hexagonal (ports & adapters). **No opera el HSM ni emite certificados directamente** — delega la operación criptográfica a [`hsm-service`](../hsm-service) vía HTTP y obtiene/valida el certificado del firmante vía [`certificate-service`](../certificate-service) (`GET /certificates/{id}`, `POST /internal/certificates/validate-chain`), reenviando el JWT del caller original (servicios stateless, sin token de servicio fijo).
 
-**Estado actual:** la infraestructura compartida (auth JWT, auditoría híbrida, cliente HSM, repositorio de tenant, idempotencia, manejo de errores) ya está wireada — ver `CLAUDE.md`/`AGENTS.md`. La lógica de negocio de firma/verificación todavía no está implementada; el único endpoint activo es `/health`.
+**Estado actual:** `POST /api/v1/sign` ya firma documentos end-to-end (PIN/sesión ADR-005, certificate-service, hsm-service, persistencia) — ver `CLAUDE.md`/`AGENTS.md`. Todavía no hay verificación de firmas, ni empaquetado PKCS#7/CMS (la firma devuelta es el valor crudo que entrega hsm-service).
 
 ## Características
 
@@ -17,9 +17,10 @@ API REST en Python (FastAPI) para firma digital de documentos, multi-tenant, arq
 
 | Método | Ruta | Qué hace |
 |---|---|---|
+| `POST` | `/sign` | Firma un documento con un certificado propio (PIN o session_token vigente — ADR-005). `signature_format` siempre `RAW` hoy |
 | `GET` | `/health` | Health check (DB + Redis), sin autenticación |
 
-(Los endpoints de firma/verificación de documentos se agregarán acá a medida que se implementen — ver `app/application/use_cases/`.)
+(La verificación de firmas se agregará acá cuando se implemente.)
 
 ## Estructura
 [STRUCTURE.md](./STRUCTURE.md) para el árbol completo.

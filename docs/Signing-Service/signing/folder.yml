@@ -1,0 +1,8 @@
+info:
+  name: signing
+  type: folder
+
+request:
+  auth:
+    type: bearer
+    token: "{{apiKey}}"

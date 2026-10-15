@@ -15,7 +15,9 @@ from fastapi import HTTPException, Request
 from starlette.status import HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERROR
 
 from app.domain.ports.output.AuditEventDispatcher import AuditEventDispatcher
+from app.domain.ports.output.CertificateClient import CertificateClient
 from app.domain.ports.output.HSMClient import HSMClient
+from app.domain.ports.output.SigningPinVerifier import SigningPinVerifier
 
 
 def get_bearer_token(request: Request) -> str:
@@ -43,3 +45,23 @@ def get_audit_dispatcher(request: Request) -> Optional[AuditEventDispatcher]:
     """None when AUDIT_ENABLED=false — callers treat it as optional (see
     IdempotentAuditedIssuance), unlike hsm.py's own stricter requirement."""
     return getattr(request.app.state, "audit_worker", None)
+
+
+def get_certificate_client(request: Request) -> CertificateClient:
+    client = getattr(request.app.state, "certificate_client", None)
+    if client is None:
+        raise HTTPException(
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Certificate client not initialized",
+        )
+    return client
+
+
+def get_pin_verifier(request: Request) -> SigningPinVerifier:
+    verifier = getattr(request.app.state, "pin_verifier", None)
+    if verifier is None:
+        raise HTTPException(
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Signing PIN verifier not initialized",
+        )
+    return verifier

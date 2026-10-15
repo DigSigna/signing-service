@@ -10,6 +10,7 @@ Los patrones de seguridad de `hsm-service/CLAUDE.md` y `certificate-service/CLAU
 
 **Hallazgos ya identificados que no debes repetir:**
 - `DomainError.to_dict()` (`app/domain/exceptions/domain_errors.py`, copiado tal cual de `certificate-service`) serializaba cualquier campo `datetime` de una subclase (p. ej. `SigningPinLockedError.locked_until`, agregado en esta misma tarea) sin convertirlo a string — `ErrorHandlingMiddleware` pasa ese dict directo a `JSONResponse(content=...)`, que llama a `json.dumps()` sin encoder para `datetime` y lanza `TypeError`. En la práctica, cualquier error de dominio que cargue un campo `datetime` nunca llegaría al caller como la respuesta HTTP limpia que se esperaba, sino como un error no manejado. **Ya corregido** (acá y en `certificate-service`, donde se encontró primero) con un helper `_jsonable()` que hace `.isoformat()` en cualquier `datetime` antes de meterlo en `details` — si agregás un nuevo campo `datetime` a una subclase de `DomainError`, no necesitás hacer nada especial, pero si agregás algún otro tipo no serializable por `json.dumps` (p. ej. `UUID`, `Decimal`), extendé `_jsonable()`, no asumas que `to_dict()` ya lo cubre.
+- Los modelos SQLAlchemy de este servicio nunca declaran `ForeignKey` (mismo estilo minimalista que `Tenant`/`AuditEvent`/`IdempotencyKey`: columnas sueltas, sin metadata de FK). Eso es inofensivo mientras cada repositorio escriba una sola tabla — pero `SQLAlchemySignatureRecordRepository.create()` escribe `signing_requests` y `signatures` (1:1, con una FK real en la base hacia `signing_requests.id`) en la misma transacción, y sin esa metadata SQLAlchemy no tiene forma de saber que `Signature` depende de `SigningRequest` — el autoflush implícito de `session.add()` + `commit()` terminó mandando el INSERT de `signatures` primero, y la FK real de la base lo rechazó (`IntegrityError 1452`). **Ya corregido**: `await self._session.flush()` explícito entre ambos `add()`, forzando el orden sin necesidad de declarar `ForeignKey`. Si agregás un repositorio nuevo que escriba más de una tabla con una dependencia entre ellas, no asumas que el orden de tus `add()` alcanza — o declarás la `ForeignKey`, o flusheás explícitamente entre medio. Encontrado corriendo el repositorio contra la base de dev real (`hsm-service-mysql-1`), no en los tests unitarios (que mockean el repositorio, no SQLAlchemy).
 
 **Qué se mantuvo de la copia (infraestructura genérica, ya wireada y funcionando):**
 - `app/core/` completo: config (Pydantic Settings + YAML + expansión de env vars), logger JSON estructurado, request context (contextvars).
@@ -29,13 +30,19 @@ Los patrones de seguridad de `hsm-service/CLAUDE.md` y `certificate-service/CLAU
 - `CERTIFICATE_SERVICE_BASE_URL`/`CERTIFICATE_SERVICE_TIMEOUT` y `SIGNING_PIN_SESSION_TTL_MINUTES`/`SIGNING_PIN_SESSION_MAX_SIGNATURES` (`app/core/config.py`, `config/config.yaml`) — este último es `0` = sin límite de firmas (solo manda `expires_at`).
 - El token de sesión es generado con `secrets.token_urlsafe` (nunca `random`) y solo se persiste su hash SHA-256 (`session_token_hash`) — el token crudo se devuelve una sola vez al caller y nunca se guarda en ningún lado, mismo razonamiento que `certificates.pin_hash`.
 
+**`POST /api/v1/sign` (único endpoint de negocio wireado, además de `/health`):** hashea el documento (SHA-256, solo para el registro propio — ver nota de doble-hasheo abajo), obtiene y valida la cadena del certificado vía `certificate-service` (`CertificateClient`/`RemoteCertificateClient`, `app/infrastructure/external/certificate/http_certificate_client.py`: `GET /api/v1/certificates/{id}` + `POST /internal/certificates/validate-chain`), resuelve PIN/sesión (ADR-005, arriba) y pide a `hsm-service` que firme. Idempotente vía el mismo `claim_idempotency_key`/`finish_idempotency_claim` que usa `certificate-service` (clave: `X-Request-ID`). Persiste en las tablas compartidas `signing_requests`/`signatures` (migración 003 del repo `migrations`, **no 023** — esas tablas ya existían, de antes del patrón `Owner(type,id)`; por eso `signing_requests.user_id`/`organization_id` son FKs rígidas a `users`/`organizations`, no una columna polimórfica suelta como `certificates.owner_id`) a través de `SignatureRecord` (entidad aplanada 1:1) + `SignatureRecordRepository`/`SQLAlchemySignatureRecordRepository`.
+
+- **`signature_format` es siempre `"RAW"` hoy** — no hay armado de PKCS#7/CMS todavía. No es una laguna silenciosa: la columna `signatures.signature_format` ya tiene `RAW` como valor legítimo del ENUM, a propósito para esta fase.
+- **`hsm_client.sign_hash()` recibe el documento completo, no un digest.** A pesar de lo que sugieren los diagramas viejos de `platform-docs` (`architecture/sprint-1.0/diagrams/flow/signatures/`, que muestran al cliente mandando un hash ya calculado), el contrato real de `HSMClient`/`hsm-service` (confirmado por su propio docstring y por el commit que arregló un bug de doble-hasheo) es que el HSM hashea internamente — pasarle un digest ya calculado produce una firma inválida. El hash SHA-256 que este servicio calcula es solo para `signing_requests.document_hash` (registro propio), nunca lo que se firma. Esto implica mandar el documento completo (base64) a `hsm-service` en cada firma — aceptable para esta fase, pero no escala bien a documentos grandes; si eso se vuelve un problema, revisar el mecanismo PKCS#11 que usa `hsm-service` (`CKM_SHA256_RSA_PKCS`) antes de asumir que el fix va del lado de `signing-service`.
+- El `session_token` de la respuesta viene vacío (`None`) en un replay por idempotencia — no es recuperable ahí, solo se busca por su hash, nunca por `signing_request_id` (ver `SignDocumentUseCaseImpl`).
+
 **Qué se eliminó (específico de certificados/CA, no aplica a firma de documentos):** entidad `Certificate` y sus value objects X.509 (`DistinguishedName`, `SerialNumber`, `RevocationInfo`, `KeyUsage`, `ExtendedKeyUsage`, `SubjectAlternativeNames`, `ValidityPeriod`, `CertificateStatus`), los casos de uso de emisión/revocación/listado/validación de cadena, `TenantCARepository`/`CertificateRepository` y sus adaptadores SQLAlchemy, `x509_builder.py`/`x509_verifier.py`/`hsm_backed_key.py` (construcción de certificados X.509 firmados por el HSM), las rutas `cas.py`/`certificates.py`/`internal_certificates.py` y sus schemas, el proxy público `/hsm/*` (este servicio llama a `RemoteHSMClient` internamente, no necesita exponer gestión de claves), y los errores de dominio específicos de CA/certificado. `Algorithm`/`KeyPurpose` se mantuvieron — son atributos genéricos de clave del `HSMClient`, no de X.509.
 
 ## Qué es este servicio
 
 Signing Service: API REST en Python (FastAPI) para firma digital de documentos, multi-tenant, arquitectura hexagonal. Según el flujo documentado en `platform-docs` (DLT-015, `architecture/sprint-1.0/diagrams/flow/signatures/`): recibe un documento, calcula su hash, obtiene y valida el certificado del firmante vía `certificate-service` (`GET /certificates/{id}` + `POST /internal/certificates/validate-chain`), pide a `hsm-service` que firme el hash, construye el paquete de firma (PKCS#7/PAdES) y lo embebe en el documento; también valida firmas existentes. **No opera el HSM ni emite certificados directamente** — delega ambas cosas a sus servicios hermanos.
 
-**Estado real del repositorio (no asumas que hay más de lo que hay):** hoy **no hay ningún caso de uso de firma/verificación implementado ni wireado como endpoint HTTP**. `app/application/use_cases/`, `app/application/dto/` y `app/application/mappers/` están vacíos, `app/domain/events/` e `app/infrastructure/external/do_storage/` existen como carpetas vacías (ni `__init__.py`), y el único router registrado en `app/main.py` es `/health`. Lo que sí existe y funciona, con tests, es toda la infraestructura listada arriba — incluida la pieza de signing PIN (ADR-005) — pero nada de eso está todavía detrás de una ruta `/api/v1/sign` real. Construir ese caso de uso (hashear el documento, resolver PIN/sesión, pedirle a `hsm-service` que firme, armar el paquete de firma) es el trabajo pendiente, no algo ya hecho que falte conectar.
+**Estado real del repositorio (no asumas que hay más de lo que hay):** `POST /api/v1/sign` (ver arriba) ya está wireado end-to-end — es el único caso de uso de negocio implementado hoy; **todavía no hay verificación de firmas** (`/verify` o similar no existe). `app/application/dto/` y `app/application/mappers/` siguen vacíos (no se necesitaron para este caso de uso), `app/domain/events/` e `app/infrastructure/external/do_storage/` existen como carpetas vacías (ni `__init__.py`). No hay empaquetado PKCS#7/CMS (ver nota de `signature_format` arriba) ni endpoint de verificación — construir eso es el trabajo pendiente.
 
 Stack: Python 3.11, FastAPI, Pydantic v2 (`pydantic-settings`), SQLAlchemy 2.0 async (`asyncmy`), Redis (cache de tokens JWT), `cryptography` (usada hoy solo por `InMemoryHSMClient`/tests), PyJWT, Uvicorn.
 
@@ -47,32 +54,33 @@ Stack: Python 3.11, FastAPI, Pydantic v2 (`pydantic-settings`), SQLAlchemy 2.0 a
 app/
   core/                                 # config, logger JSON, request context — igual a certificate-service/hsm-service
   domain/
-    entities/                           # AuditEvent, IdempotencyRecord, SigningSession, Tenant (Pydantic) — sin Certificate
+    entities/                           # AuditEvent, IdempotencyRecord, SignatureRecord, SigningSession, Tenant (Pydantic) — sin Certificate
     events/                             # carpeta vacía hoy (ni __init__.py)
-    exceptions/domain_errors.py         # jerarquía de excepciones genérica + Signing PIN (sin subclases de CA/certificado)
-    ports/{input,output}/               # AuditRecorder; AuditEventDispatcher/AuditStorage/AuditTransporter, HSMClient, IdempotencyRepository, JWTKeyProvider/JWTValidator, SigningPinVerifier, SigningSessionRepository, TenantRepository
+    exceptions/domain_errors.py         # jerarquía de excepciones genérica + Signing PIN + CertificateClient (sin subclases de CA/certificado)
+    ports/{input,output}/               # SignDocumentUseCase; AuditRecorder; AuditEventDispatcher/AuditStorage/AuditTransporter, CertificateClient, HSMClient, IdempotencyRepository, JWTKeyProvider/JWTValidator, SignatureRecordRepository, SigningPinVerifier, SigningSessionRepository, TenantRepository
     valueobjects/                       # ActorType, Algorithm, AuditData, AuditStrategy, IdentityContext, KeyPurpose, Owner(Type), PlanType, TenantMode, TenantStatus
   application/
-    dto/, mappers/, use_cases/          # VACÍOS hoy — acá va el caso de uso de firma/verificación que falta
+    dto/, mappers/                      # VACÍOS hoy
+    use_cases/sign_document.py          # SignDocumentUseCaseImpl — POST /api/v1/sign
     services/                           # idempotency.py, audit_helpers.py, signing_pin_session.py (try_resume_session/start_session/record_signature — ADR-005)
   infrastructure/
     audit/                              # audit_worker.py + factory.py + hybrid_processor.py — ya wireado si AUDIT_ENABLED
-    crypto/                             # no existe todavía (se eliminó junto con x509_builder/verifier) — crealo cuando se implemente la firma real
-    database/                           # sesión SQLAlchemy async; models/{base,tenant,audit_event,idempotency_key,signing_pin_session}.py; repositories/{tenant_repository,audit_repository,idempotency_repository,signing_pin_session_repository}.py; adapters/audited_tenant_repository.py
+    crypto/                             # no existe todavía (se eliminó junto con x509_builder/verifier) — crealo cuando se implemente PKCS#7/CMS
+    database/                           # sesión SQLAlchemy async; models/{base,tenant,audit_event,idempotency_key,signing_pin_session,signing_request,signature}.py; repositories/{tenant_repository,audit_repository,idempotency_repository,signing_pin_session_repository,signature_record_repository}.py; adapters/audited_tenant_repository.py
     external/hsm/                       # factory + RemoteHSMClient + InMemoryHSMClient
-    external/certificate/http_pin_verifier.py  # RemoteSigningPinVerifier — llama al /internal/.../verify-pin de certificate-service
+    external/certificate/               # http_pin_verifier.py (RemoteSigningPinVerifier) + http_certificate_client.py (RemoteCertificateClient) — ambos a certificate-service
     external/redis/                     # cache de tokens JWT
     external/audit/http_audit_transporter.py
     external/do_storage/                # carpeta vacía hoy (ni __init__.py)
   interfaces/
     auth/permissions.py                 # require_admin / get_identity_context
     middleware/                         # auth, logging, error_handling, request_context — las 4 ya registradas en main.py
-    routes/health.py                    # único endpoint HTTP wireado hoy
-    schemas/                            # errors.py, health.py — sin schemas de certificado/CA
+    routes/{health,signing}.py          # GET /health, POST /sign — los dos únicos endpoints HTTP wireados hoy
+    schemas/                            # errors.py, health.py, signing.py — sin schemas de certificado/CA
 config/config.yaml                      # config base (fusiona con .env y env vars vía pydantic-settings)
 scripts/redis/, scripts/sonar/, scripts/docker/
 bruno/                                  # colección de requests manuales (si existe)
-tests/                                  # test_health, test_hsm_client, test_remote_hsm_client, test_idempotency_service, test_permissions, test_domain_errors, test_remote_signing_pin_verifier, test_signing_pin_session_service — todos de infraestructura, cero de un caso de uso HTTP real (no hay negocio todavía)
+tests/                                  # test_health, test_hsm_client, test_remote_hsm_client, test_idempotency_service, test_permissions, test_domain_errors, test_remote_signing_pin_verifier, test_signing_pin_session_service, test_remote_certificate_client, test_sign_document_use_case — todo mockeado (sin DB/certificate-service/hsm-service reales en CI)
 ```
 
 ## Comandos esenciales
@@ -142,7 +150,8 @@ Mismo espíritu que `hsm-service`/`certificate-service`, adaptado a este servici
 - La capa HSM **siempre se mockea** en tests — usá `InMemoryHSMClient`, nunca apuntes un test a un `hsm-service` real.
 - `pytest-asyncio` ya está configurado.
 - Antes de dar por terminada una tarea: `pytest -v --cov=app`, `bandit -r app/`, y si tocaste `requirements/`, `safety check -r requirements/base.txt`.
-- Si agregás el primer caso de uso de firma en `app/application/use_cases/`, agregá su test en el mismo PR — hoy la cobertura de negocio es cero porque no existe negocio todavía.
+- Si agregás un caso de uso nuevo en `app/application/use_cases/` (p. ej. verificación de firmas), agregá su test en el mismo PR, igual que `test_sign_document_use_case.py` para `SignDocumentUseCaseImpl` — todo con fakes, nunca una conexión real.
+- Un repositorio SQLAlchemy nuevo que escriba más de una tabla con una dependencia entre ellas: probalo contra una base real al menos una vez (no solo con fakes) — ver el hallazgo de ordenamiento de `flush()` arriba, que ningún test unitario iba a atrapar.
 
 ## Notas de entorno (Windows / Docker)
 

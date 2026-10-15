@@ -35,6 +35,14 @@ services:
       HSM_SERVICE_BASE_URL: "http://hsm-service:8080"
       HSM_SERVICE_TIMEOUT: 5s
 
+      # certificate-service (verify-pin + get/validate certificado, ADR-005) —
+      # mismo patrón que HSM_SERVICE_BASE_URL: nombre de servicio en hsm-network,
+      # puerto interno del contenedor (8000, no el 8001 publicado al host de ESTE
+      # servicio). Sin esto, /sign falla con "Certificate client not initialized"
+      # (ver app/main.py: el cliente solo se construye si esto no está vacío).
+      CERTIFICATE_SERVICE_BASE_URL: "http://certificate-service:8000"
+      CERTIFICATE_SERVICE_TIMEOUT: 5s
+
       # Auditoría: hybrid cae a solo-DB si no hay AUDIT_HTTP_BASE_URL (ver app/infrastructure/audit/factory.py)
       AUDIT_ENABLED: "true"
       AUDIT_STRATEGY: hybrid
