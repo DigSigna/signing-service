@@ -32,3 +32,9 @@ class SignatureRecord:
     document_name: Optional[str] = None
     user_id: Optional[UUID] = None
     organization_id: Optional[UUID] = None
+    # ADR-002/signing-plan.md point 3. tsa_provider == "local-pseudo"
+    # (with tsa_token None) means every configured TSA was unreachable —
+    # that string is the marker a future re-seal job would query for.
+    tsa_provider: Optional[str] = None
+    tsa_token: Optional[bytes] = None
+    tsa_sealed_at: Optional[datetime] = None

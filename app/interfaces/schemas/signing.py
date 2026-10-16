@@ -49,8 +49,17 @@ class SignDocumentResponse(BaseModel):
         description="El PDF completo, con la firma PAdES-B embebida (incremental "
         "update) — no una firma separada del documento",
     )
-    signature_format: str = Field(..., description="PAdES-B hoy; XAdES/CAdES a futuro")
+    signature_format: str = Field(
+        ..., description="PAdES-T si se logró sellar con un TSA real, PAdES-B si no"
+    )
     signing_time: datetime
+    tsa_provider: Optional[str] = Field(
+        None,
+        description="'freetsa'/'certum' si un TSA real selló la firma; "
+        "'local-pseudo' si ambos TSA fallaron (ADR-002) — no bloquea la firma, "
+        "pero esta fila necesitará re-sellado más adelante",
+    )
+    tsa_sealed_at: Optional[datetime] = None
     session_token: Optional[str] = Field(
         None,
         description="Usar en la próxima firma dentro de session_expires_at para "
@@ -68,8 +77,10 @@ class SignDocumentResponse(BaseModel):
                     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                 ),
                 "signed_document_b64": "JVBERi0xLjQK...",
-                "signature_format": "PAdES-B",
+                "signature_format": "PAdES-T",
                 "signing_time": "2026-10-15T19:30:00+00:00",
+                "tsa_provider": "freetsa",
+                "tsa_sealed_at": "2026-10-15T19:30:01+00:00",
                 "session_token": "9f2c...",
                 "session_expires_at": "2026-10-15T19:50:00+00:00",
             }
@@ -88,6 +99,8 @@ class SignDocumentResponse(BaseModel):
             ),
             signature_format=result.signature_format,
             signing_time=result.signing_time,
+            tsa_provider=result.tsa_provider,
+            tsa_sealed_at=result.tsa_sealed_at,
             session_token=result.session_token,
             session_expires_at=result.session_expires_at,
         )

@@ -2,7 +2,7 @@
 
 API REST en Python (FastAPI) para firma digital de documentos, multi-tenant, arquitectura hexagonal (ports & adapters). **No opera el HSM ni emite certificados directamente** — delega la operación criptográfica a [`hsm-service`](../hsm-service) vía HTTP y obtiene/valida el certificado del firmante vía [`certificate-service`](../certificate-service) (`GET /certificates/{id}`, `POST /internal/certificates/validate-chain`), reenviando el JWT del caller original (servicios stateless, sin token de servicio fijo).
 
-**Estado actual:** `POST /api/v1/sign` ya firma documentos end-to-end con PAdES-B real (PIN/sesión ADR-005, certificate-service, hsm-service, persistencia) — ver `CLAUDE.md`/`AGENTS.md` y `docs/signing-plan.md`. Todavía no hay verificación de firmas, ni soporte N-firmantes, ni integración TSA.
+**Estado actual:** `POST /api/v1/sign` ya firma documentos end-to-end con PAdES real — PAdES-T cuando un TSA (RFC 3161, ADR-002) responde, PAdES-B con fallback a pseudo-timestamp local si no — con PIN/sesión (ADR-005), certificate-service, hsm-service y persistencia. Ver `CLAUDE.md`/`AGENTS.md` y `docs/signing-plan.md` (puntos 1-3 cerrados, 4-7 pendientes). Todavía no hay verificación de firmas ni soporte N-firmantes.
 
 ## Características
 
@@ -17,7 +17,7 @@ API REST en Python (FastAPI) para firma digital de documentos, multi-tenant, arq
 
 | Método | Ruta | Qué hace |
 |---|---|---|
-| `POST` | `/sign` | Firma un documento (PDF) con un certificado propio (PIN o session_token vigente — ADR-005). Devuelve el PDF firmado completo (`signed_document_b64`), `signature_format` siempre `PAdES-B` hoy |
+| `POST` | `/sign` | Firma un documento (PDF) con un certificado propio (PIN o session_token vigente — ADR-005). Devuelve el PDF firmado completo (`signed_document_b64`); `signature_format` es `PAdES-T` si un TSA selló la firma (RFC 3161, ADR-002, con fallback entre proveedores), o `PAdES-B` si ningún TSA respondió (`tsa_provider="local-pseudo"`) |
 | `GET` | `/health` | Health check (DB + Redis), sin autenticación |
 
 (La verificación de firmas se agregará acá cuando se implemente.)

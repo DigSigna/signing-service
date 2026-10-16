@@ -1,4 +1,5 @@
-"""PAdES-B signing via pyHanko (signing-plan.md point 1).
+"""PAdES-B signing via pyHanko (signing-plan.md point 1), with an
+RFC 3161 signature timestamp attempt (ADR-002/signing-plan.md point 3).
 
 Wires pyHanko's async custom-signer extension point directly to
 HSMClient.sign_hash: pyHanko's Signer.async_sign_raw(data,
@@ -20,7 +21,8 @@ hand-roll byte-range signing.
 from __future__ import annotations
 
 import io
-from typing import List
+from datetime import datetime, timezone
+from typing import Callable, List, Optional
 from uuid import UUID
 
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
@@ -31,15 +33,20 @@ from pyhanko.sign import PdfSignatureMetadata, async_sign_pdf
 from pyhanko.sign.fields import SigSeedSubFilter
 from pyhanko.sign.general import load_certs_from_pemder_data
 from pyhanko.sign.signers.pdf_cms import Signer
+from pyhanko.sign.timestamps import TimeStamper
 from pyhanko_certvalidator.registry import SimpleCertificateStore
 
 from app.domain.exceptions.domain_errors import ConfigurationError, ValidationError
 from app.domain.ports.output.HSMClient import HSMClient
-from app.domain.ports.output.PAdESSigner import PAdESSigner
+from app.domain.ports.output.PAdESSigner import PAdESSigner, PAdESSignResult
+from app.infrastructure.crypto.fallback_timestamper import AllTsaProvidersFailedError
 
 _FIELD_NAME = "Signature1"  # v1 is single-signer; no collision risk yet.
 _DIGEST_ALGORITHM = "sha256"  # must match hsm-service's fixed mechanism.
 _PDF_MAGIC = b"%PDF-"
+_LOCAL_PSEUDO_PROVIDER = "local-pseudo"
+_FORMAT_WITH_TIMESTAMP = "PAdES-T"
+_FORMAT_WITHOUT_TIMESTAMP = "PAdES-B"
 
 # ECDSA's DER-encoded signature length varies by a byte or two depending
 # on whether r/s need a leading zero. There is no real-world ECDSA
@@ -99,6 +106,18 @@ class _HsmBackedSigner(Signer):
 
 
 class PyHankoPAdESSigner(PAdESSigner):
+    def __init__(self, timestamper_factory: Optional[Callable[[], TimeStamper]] = None):
+        """timestamper_factory, if given, is called once per sign_pdf()
+        — never reused across calls — to get a *fresh* TimeStamper
+        instance (see the comment at its call site for why reuse across
+        concurrent requests would race). None means no TSA is configured
+        at all: every signature is immediately recorded as a local
+        pseudo-timestamp, same outcome as every candidate failing.
+        Decoupled from FallbackChainTimeStamper on purpose — this class
+        doesn't need to know there's a fallback chain behind it, only
+        that it gets a TimeStamper (or doesn't)."""
+        self._timestamper_factory = timestamper_factory
+
     async def sign_pdf(
         self,
         document: bytes,
@@ -107,7 +126,7 @@ class PyHankoPAdESSigner(PAdESSigner):
         key_id: UUID,
         hsm_client: HSMClient,
         bearer_token: str,
-    ) -> bytes:
+    ) -> PAdESSignResult:
         if not document.startswith(_PDF_MAGIC):
             raise ValidationError(
                 "document_b64 does not decode to a PDF (missing %PDF- header)",
@@ -120,34 +139,79 @@ class PyHankoPAdESSigner(PAdESSigner):
             cert_registry.register(
                 next(load_certs_from_pemder_data(pem.encode("utf-8")))
             )
+        placeholder_length = _signature_byte_length(leaf_cert_pem)
 
-        signer = _HsmBackedSigner(
-            signing_cert=leaf_cert,
-            cert_registry=cert_registry,
-            key_id=key_id,
-            hsm_client=hsm_client,
-            bearer_token=bearer_token,
-            placeholder_length=_signature_byte_length(leaf_cert_pem),
-        )
-
-        try:
-            writer = IncrementalPdfFileWriter(io.BytesIO(document))
-        except PdfError as exc:
-            raise ValidationError(
-                f"document_b64 is not a well-formed PDF: {exc}",
-                field="document_b64",
-            ) from exc
+        def _build_signer() -> _HsmBackedSigner:
+            return _HsmBackedSigner(
+                signing_cert=leaf_cert,
+                cert_registry=cert_registry,
+                key_id=key_id,
+                hsm_client=hsm_client,
+                bearer_token=bearer_token,
+                placeholder_length=placeholder_length,
+            )
 
         metadata = PdfSignatureMetadata(
             field_name=_FIELD_NAME,
             md_algorithm=_DIGEST_ALGORITHM,
             subfilter=SigSeedSubFilter.PADES,
         )
+
+        # A fresh TimeStamper per call, never a shared/reused instance:
+        # pyHanko's own dry-run size-estimation pass also calls it
+        # (TimeStamper.async_dummy_response), and FallbackChainTimeStamper
+        # tracks which delegate won as *instance* state, read right
+        # after async_sign_pdf() returns — sharing one across concurrent
+        # requests would let one request's result clobber another's
+        # between the real call and the read, since async_sign_pdf
+        # awaits multiple times after obtaining the token.
+        timestamper = self._timestamper_factory() if self._timestamper_factory else None
+
         try:
-            out = await async_sign_pdf(writer, metadata, signer=signer)
+            out = await self._attempt(document, metadata, _build_signer(), timestamper)
+        except AllTsaProvidersFailedError:
+            # Every TSA candidate failed: fall back to an un-timestamped
+            # PAdES-B signature rather than blocking the signing
+            # operation (signing-plan.md point 3). A fresh writer/signer
+            # for the retry — the failed attempt's writer may already
+            # have mutated internal state.
+            out = await self._attempt(document, metadata, _build_signer(), None)
+            tsa_provider, tsa_token = _LOCAL_PSEUDO_PROVIDER, None
+        else:
+            provider = getattr(timestamper, "last_provider", None)
+            if provider is not None:
+                tsa_provider = provider
+                tsa_token = getattr(timestamper, "last_token_der", None)
+            else:
+                tsa_provider, tsa_token = _LOCAL_PSEUDO_PROVIDER, None
+
+        signature_format = (
+            _FORMAT_WITH_TIMESTAMP
+            if tsa_token is not None
+            else _FORMAT_WITHOUT_TIMESTAMP
+        )
+        return PAdESSignResult(
+            signed_document=out.getvalue(),
+            signature_format=signature_format,
+            tsa_provider=tsa_provider,
+            tsa_token=tsa_token,
+            tsa_sealed_at=datetime.now(timezone.utc),
+        )
+
+    @staticmethod
+    async def _attempt(
+        document: bytes,
+        metadata: PdfSignatureMetadata,
+        signer: _HsmBackedSigner,
+        timestamper: Optional[TimeStamper],
+    ):
+        try:
+            writer = IncrementalPdfFileWriter(io.BytesIO(document))
+            return await async_sign_pdf(
+                writer, metadata, signer=signer, timestamper=timestamper
+            )
         except PdfError as exc:
             raise ValidationError(
                 f"document_b64 is not a well-formed PDF: {exc}",
                 field="document_b64",
             ) from exc
-        return out.getvalue()

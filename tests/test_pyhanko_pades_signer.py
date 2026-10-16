@@ -9,20 +9,31 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import pytest
+from asn1crypto import cms
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.x509.oid import NameOID
 from pyhanko.pdf_utils.reader import PdfFileReader
-from pyhanko.sign.general import load_certs_from_pemder_data
+from pyhanko.sign.general import (
+    load_certs_from_pemder_data,
+    load_private_key_from_pemder_data,
+)
+from pyhanko.sign.timestamps import DummyTimeStamper, TimeStamper, TimestampRequestError
 from pyhanko.sign.validation import async_validate_pdf_signature
 from pyhanko_certvalidator import ValidationContext
 
 from app.domain.exceptions.domain_errors import ValidationError
 from app.domain.ports.output.HSMClient import HSMClient
+from app.infrastructure.crypto.fallback_timestamper import FallbackChainTimeStamper
 from app.infrastructure.crypto.pyhanko_pades_signer import PyHankoPAdESSigner
 
 KEY_ID = UUID(int=42)
+
+
+class _AlwaysFailingTimeStamper(TimeStamper):
+    async def async_timestamp(self, message_digest: bytes, md_algorithm: str):
+        raise TimestampRequestError("simulated TSA outage")
 
 
 class _FakeHsmClient(HSMClient):
@@ -123,6 +134,40 @@ def _make_chain():
     return leaf_key, pem(leaf_cert), pem(inter_cert), pem(root_cert)
 
 
+def _make_tsa_identity():
+    """A self-signed TSA identity for DummyTimeStamper — pyHanko's own
+    test utility that produces a genuine, parseable RFC 3161 token
+    without any network call, so the "real TSA succeeded" path can be
+    tested the same way the "real TSA failed" path is: for real,
+    against pyHanko's own validator, not just "didn't raise"."""
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test TSA")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(timezone.utc) - timedelta(days=1))
+        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(
+            x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.TIME_STAMPING]),
+            critical=True,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    key_der = key.private_bytes(
+        serialization.Encoding.DER,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    tsa_key = load_private_key_from_pemder_data(key_der, None)
+    tsa_cert = next(load_certs_from_pemder_data(cert_pem))
+    return tsa_cert, tsa_key
+
+
 def _minimal_pdf() -> bytes:
     header = b"%PDF-1.4\n"
     objs = [
@@ -147,13 +192,29 @@ def _minimal_pdf() -> bytes:
     return body + xref + trailer
 
 
+def _trusted_status(signed: bytes, root_pem: str):
+    async def _validate():
+        root_cert = next(load_certs_from_pemder_data(root_pem.encode("ascii")))
+        vc = ValidationContext(trust_roots=[root_cert])
+        reader = PdfFileReader(io.BytesIO(signed))
+        embedded = reader.embedded_signatures[0]
+        return await async_validate_pdf_signature(
+            embedded, signer_validation_context=vc
+        )
+
+    return _validate()
+
+
 @pytest.mark.asyncio
-async def test_sign_pdf_produces_valid_trusted_pades_signature():
+async def test_sign_pdf_without_tsa_configured_produces_pades_b():
+    """No timestamper_factory at all — same outcome as every TSA
+    candidate failing: PAdES-B, local-pseudo, no embedded token. The
+    signature itself must still be perfectly valid."""
     leaf_key, leaf_pem, inter_pem, root_pem = _make_chain()
     hsm = _FakeHsmClient(leaf_key)
     signer = PyHankoPAdESSigner()
 
-    signed = await signer.sign_pdf(
+    result = await signer.sign_pdf(
         document=_minimal_pdf(),
         leaf_cert_pem=leaf_pem,
         chain_pems=[inter_pem],
@@ -162,19 +223,93 @@ async def test_sign_pdf_produces_valid_trusted_pades_signature():
         bearer_token="caller-jwt",
     )
 
-    assert signed.startswith(b"%PDF-")
+    assert result.signed_document.startswith(b"%PDF-")
+    assert result.signature_format == "PAdES-B"
+    assert result.tsa_provider == "local-pseudo"
+    assert result.tsa_token is None
+    assert result.tsa_sealed_at is not None
 
     # hsm-service must receive the raw signed-attrs bytes, never a
     # pre-computed digest (see HSMClient.sign_hash's docstring).
     real_calls = [c for c in hsm.sign_calls if c[1] != b"\0" * (2048 // 8)]
     assert all(c[0] == KEY_ID and c[2] == "caller-jwt" for c in real_calls)
 
-    root_cert = next(load_certs_from_pemder_data(root_pem.encode("ascii")))
-    vc = ValidationContext(trust_roots=[root_cert])
-    reader = PdfFileReader(io.BytesIO(signed))
-    embedded = reader.embedded_signatures[0]
-    status = await async_validate_pdf_signature(embedded, signer_validation_context=vc)
+    status = await _trusted_status(result.signed_document, root_pem)
+    assert status.intact is True
+    assert status.valid is True
+    assert status.trusted is True
+    assert status.timestamp_validity is None  # nothing was embedded
 
+
+@pytest.mark.asyncio
+async def test_sign_pdf_embeds_real_tsa_token_when_available():
+    """A TSA that actually answers (DummyTimeStamper — pyHanko's own
+    test utility, produces a genuine parseable RFC 3161 token, no
+    network) must end up embedded and recognized by pyHanko's own
+    validator, and signature_format must say PAdES-T."""
+    leaf_key, leaf_pem, inter_pem, root_pem = _make_chain()
+    hsm = _FakeHsmClient(leaf_key)
+    tsa_cert, tsa_key = _make_tsa_identity()
+
+    def build_timestamper():
+        return FallbackChainTimeStamper(
+            [("test-tsa", DummyTimeStamper(tsa_cert, tsa_key))]
+        )
+
+    signer = PyHankoPAdESSigner(timestamper_factory=build_timestamper)
+
+    result = await signer.sign_pdf(
+        document=_minimal_pdf(),
+        leaf_cert_pem=leaf_pem,
+        chain_pems=[inter_pem],
+        key_id=KEY_ID,
+        hsm_client=hsm,
+        bearer_token="caller-jwt",
+    )
+
+    assert result.signature_format == "PAdES-T"
+    assert result.tsa_provider == "test-tsa"
+    assert result.tsa_token is not None
+    cms.ContentInfo.load(result.tsa_token)  # must parse as a real CMS token
+
+    status = await _trusted_status(result.signed_document, root_pem)
+    assert status.intact is True
+    assert status.valid is True
+    assert status.timestamp_validity is not None
+
+
+@pytest.mark.asyncio
+async def test_sign_pdf_falls_back_to_pseudo_timestamp_when_tsa_unavailable():
+    """Every configured TSA failing must not block the signature — it
+    degrades to PAdES-B with no embedded token, same as not configuring
+    a TSA at all, and the signature itself is still perfectly valid."""
+    leaf_key, leaf_pem, inter_pem, root_pem = _make_chain()
+    hsm = _FakeHsmClient(leaf_key)
+
+    def build_timestamper():
+        return FallbackChainTimeStamper(
+            [
+                ("primary-down", _AlwaysFailingTimeStamper()),
+                ("secondary-down", _AlwaysFailingTimeStamper()),
+            ]
+        )
+
+    signer = PyHankoPAdESSigner(timestamper_factory=build_timestamper)
+
+    result = await signer.sign_pdf(
+        document=_minimal_pdf(),
+        leaf_cert_pem=leaf_pem,
+        chain_pems=[inter_pem],
+        key_id=KEY_ID,
+        hsm_client=hsm,
+        bearer_token="caller-jwt",
+    )
+
+    assert result.signature_format == "PAdES-B"
+    assert result.tsa_provider == "local-pseudo"
+    assert result.tsa_token is None
+
+    status = await _trusted_status(result.signed_document, root_pem)
     assert status.intact is True
     assert status.valid is True
     assert status.trusted is True

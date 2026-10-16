@@ -13,11 +13,13 @@ mutating use cases use (app/application/services/idempotency.py):
 request_id comes from the client's X-Request-ID header (see
 RequestContextMiddleware) via get_context_values().
 
-Real PAdES-B signing (signing-plan.md point 1) via PAdESSigner —
-signature_format is "PAdES-B", not "RAW": the artifact is now the
-complete signed PDF (PyHankoPAdESSigner), not a detached signature over
-the whole file. The certificate chain embedded is leaf + intermediate
-(never the root — see IntermediateCertificateCache).
+Real PAdES signing (signing-plan.md point 1) via PAdESSigner — the
+artifact is the complete signed PDF (PyHankoPAdESSigner), not a
+detached signature over the whole file. The certificate chain embedded
+is leaf + intermediate (never the root — see
+IntermediateCertificateCache). signature_format ("PAdES-T" vs
+"PAdES-B") and the tsa_* fields come straight from PAdESSignResult —
+this use case never decides the TSA outcome itself (point 3).
 """
 
 from __future__ import annotations
@@ -66,7 +68,6 @@ from app.infrastructure.external.certificate.intermediate_cache import (
 
 _SERVICE_NAME = "signing-service"
 _RESOURCE_TYPE = "signature"
-_SIGNATURE_FORMAT = "PAdES-B"
 _HASH_ALGORITHM = "SHA256"
 _PDF_MAGIC = b"%PDF-"
 
@@ -208,7 +209,7 @@ class SignDocumentUseCaseImpl(SignDocumentUseCase):
                     )
                 )
 
-            signed_document = await self._pades_signer.sign_pdf(
+            pades_result = await self._pades_signer.sign_pdf(
                 document=command.document,
                 leaf_cert_pem=certificate.pem,
                 chain_pems=chain_pems,
@@ -228,12 +229,15 @@ class SignDocumentUseCaseImpl(SignDocumentUseCase):
                 document_hash=document_hash,
                 hash_algorithm=_HASH_ALGORITHM,
                 signature_id=uuid4(),
-                signature_value=signed_document,
-                signature_format=_SIGNATURE_FORMAT,
+                signature_value=pades_result.signed_document,
+                signature_format=pades_result.signature_format,
                 signing_time=now,
                 document_name=command.document_name,
                 user_id=_user_id(identity_context),
                 organization_id=_organization_id(identity_context),
+                tsa_provider=pades_result.tsa_provider,
+                tsa_token=pades_result.tsa_token,
+                tsa_sealed_at=pades_result.tsa_sealed_at,
             )
             await self._signature_repo.create(record)
             return _to_result(record, session_token, session_expires_at)
@@ -298,6 +302,8 @@ def _to_result(
         signature_value=record.signature_value,
         signature_format=record.signature_format,
         signing_time=record.signing_time,
+        tsa_provider=record.tsa_provider,
+        tsa_sealed_at=record.tsa_sealed_at,
         session_token=session_token,
         session_expires_at=session_expires_at,
     )

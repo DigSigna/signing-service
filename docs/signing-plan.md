@@ -57,19 +57,42 @@ miente sobre el contenido no cambia el resultado) y `test_document_name_is_store
 (un `document_name` con forma de path traversal se persiste como texto plano, sin efecto alguno).
 
 ## 3. Integración real con el TSA (ADR-002) — pendiente, no cosmético
-- [ ] Implementar cliente HTTP hacia el TSA primario (ANF AC free tier), con fallback a
-  Certum/FreeTSA.org, y pseudo-timestamp local (hash + hora de pared, logueado) si ambos
-  fallan, con re-sellado posterior cuando un TSA real esté disponible — tal como describe
-  ADR-002.
-- [ ] Lo que se sella con el TSA es **el valor de la firma**, no el documento original ni su
-  hash directo — sellar después de firmar, nunca antes.
-- [ ] Embeber el token TSA (RFC 3161, DER) como atributo no firmado dentro de la estructura
-  CMS/PAdES (la librería de PAdES del punto 1 debería soportar esto directamente).
-- [ ] Persistir `tsa_token`, `tsa_provider`, `tsa_sealed_at` en la fila de `signatures`
-  correspondiente (verificar existencia de las columnas).
-- [ ] Si el sellado falla (ambos TSA caídos), el flujo no debe bloquear la firma — persistir
-  el pseudo-timestamp local y marcar la fila para re-sellado posterior (puede ser un job o un
-  endpoint de reintento explícito, no algo automático en cada GET — ver punto 5).
+
+**Decisión tomada durante la implementación:** ADR-002 nombra el free tier de ANF AC como
+primario, pero no existe un endpoint públicamente documentado para él (su propia política de
+TSA sugiere que la URL es específica por contrato/suscripción, no pública). Se usó FreeTSA.org
+(`https://freetsa.org/tsr`) como primario y Certum (`http://time.certum.pl`) como secundario —
+ambos verificados en vivo, gratuitos, sin cuenta. Swapear ANF AC más adelante es un cambio de
+config (`TSA_PRIMARY_URL`), no un rediseño. Ver `platform-docs/security/known-deviations.md`
+(KD-011).
+
+- [x] Implementar cliente HTTP hacia el TSA primario, con fallback a un secundario, y
+  pseudo-timestamp local (hash + hora de pared, logueado) si ambos fallan, con re-sellado
+  posterior cuando un TSA real esté disponible — tal como describe ADR-002.
+  `app/infrastructure/crypto/fallback_timestamper.py` (`FallbackChainTimeStamper`), sobre
+  `pyhanko.sign.timestamps.HTTPTimeStamper` (RFC 3161 real, no construido a mano).
+- [x] Lo que se sella con el TSA es **el valor de la firma**, no el documento original ni su
+  hash directo — sellar después de firmar, nunca antes. Inherente a cómo pyHanko invoca el
+  timestamper (después de que el signer ya produjo `signatureValue`), no algo que este
+  servicio tenga que orquestar manualmente.
+- [x] Embeber el token TSA (RFC 3161, DER) como atributo no firmado dentro de la estructura
+  CMS/PAdES — pyHanko lo soporta directamente vía `async_sign_pdf(..., timestamper=...)`.
+  Verificado con el propio validador de pyHanko (`status.timestamp_validity is not None`
+  cuando el TSA responde), no solo "no tiró excepción" — ver
+  `test_sign_pdf_embeds_real_tsa_token_when_available`.
+- [x] Persistir `tsa_token`, `tsa_provider`, `tsa_sealed_at` en la fila de `signatures`
+  correspondiente. **Las columnas de la migración 016 no existían en la base de dev
+  compartida** pese a que `schema_migrations` reportaba versión 23 limpia — hallazgo real,
+  no hipotético (ver `known-deviations.md` KD-012); se aplicó la migración 016 a mano para
+  destrabar la verificación. `signature_format` también necesitó una migración nueva (025):
+  el ENUM original de la migración 003 (`PKCS7`/`CMS`/`RAW`/`JWS`) no incluía `PAdES-B`/
+  `PAdES-T`, así que el `INSERT` real habría fallado bajo `STRICT_TRANS_TABLES` — encontrado
+  probando el flujo contra la base real, no asumido.
+- [x] Si el sellado falla (ambos TSA caídos), el flujo no debe bloquear la firma — persistir
+  el pseudo-timestamp local (`tsa_provider="local-pseudo"`, `tsa_token=NULL`) y marcar la
+  fila para re-sellado posterior. `tsa_provider="local-pseudo"` es exactamente esa marca —
+  no se construyó el job/endpoint de reintento (explícitamente fuera de alcance, ver texto
+  original de este punto y el punto 5).
 
 ## 4. Soporte para N firmantes — rediseño del flujo de endpoints
 

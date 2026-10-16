@@ -25,6 +25,12 @@ class SignDocumentResult:
     signature_value: bytes
     signature_format: str
     signing_time: datetime
+    # "local-pseudo" when every configured TSA was unreachable
+    # (ADR-002/signing-plan.md point 3) — tsa_sealed_at is still set in
+    # that case (local wall-clock time), just not backed by a real RFC
+    # 3161 token.
+    tsa_provider: Optional[str]
+    tsa_sealed_at: Optional[datetime]
     # None on an idempotency replay (see SignDocumentUseCaseImpl): the
     # session token isn't persisted anywhere this service can look it
     # back up by signing_request_id, only its hash, keyed by the token

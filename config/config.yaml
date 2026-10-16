@@ -38,6 +38,11 @@ signing_pin_session:
   ttl_minutes: ${SIGNING_PIN_SESSION_TTL_MINUTES:20}
   max_signatures: ${SIGNING_PIN_SESSION_MAX_SIGNATURES:0}
 
+tsa:
+  primary_url: "${TSA_PRIMARY_URL:https://freetsa.org/tsr}"
+  secondary_url: "${TSA_SECONDARY_URL:http://time.certum.pl}"
+  timeout: "${TSA_TIMEOUT:5s}"
+
 audit:
   enabled: ${AUDIT_ENABLED:true}
   strategy: "${AUDIT_STRATEGY:hybrid}"

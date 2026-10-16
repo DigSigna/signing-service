@@ -190,6 +190,28 @@ class Settings(BaseSettings):
         "design — it only changes if the CA itself rotates.",
     )
 
+    # RFC 3161 timestamping, primary/secondary fallback chain (ADR-002,
+    # signing-plan.md point 3). Both free, public, no account needed —
+    # see fallback_timestamper.py's module docstring for why ANF AC
+    # (the ADR's original primary) isn't configured here: no publicly
+    # documented endpoint, contract-specific per its own TSA policy.
+    TSA_PRIMARY_URL: str = Field(
+        default="https://freetsa.org/tsr",
+        validation_alias=AliasChoices(
+            "TSA_PRIMARY_URL", AliasPath("tsa", "primary_url")
+        ),
+    )
+    TSA_SECONDARY_URL: str = Field(
+        default="http://time.certum.pl",
+        validation_alias=AliasChoices(
+            "TSA_SECONDARY_URL", AliasPath("tsa", "secondary_url")
+        ),
+    )
+    TSA_TIMEOUT: str = Field(
+        default="5s",
+        validation_alias=AliasChoices("TSA_TIMEOUT", AliasPath("tsa", "timeout")),
+    )
+
     # Signing-PIN session grace window (ADR-005)
     SIGNING_PIN_SESSION_TTL_MINUTES: int = Field(
         default=20,

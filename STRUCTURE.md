@@ -21,7 +21,7 @@ Ver `CLAUDE.md`/`AGENTS.md` ("Estructura real del repositorio") para la versión
 │   ├── infrastructure/
 │   │   ├── audit/
 │   │   ├── auth/
-│   │   ├── crypto/pyhanko_pades_signer.py   # PyHankoPAdESSigner (PAdES-B real)
+│   │   ├── crypto/{pyhanko_pades_signer,fallback_timestamper}.py   # PAdES real + sello RFC 3161 con fallback
 │   │   ├── database/{models,repositories,adapters}/
 │   │   └── external/{hsm,certificate,redis,audit,do_storage}/   # certificate/ incl. intermediate_cache.py
 │   └── interfaces/
@@ -33,7 +33,7 @@ Ver `CLAUDE.md`/`AGENTS.md` ("Estructura real del repositorio") para la versión
 ├── tests/
 ├── scripts/{redis,sonar,docker}/
 ├── config/config.yaml
-├── docs/signing-plan.md               # plan de diseño (puntos 2-7 pendientes)
+├── docs/signing-plan.md               # plan de diseño (puntos 4-7 pendientes; 1-3 cerrados)
 ├── requirements/{base,dev}.txt
 ├── Dockerfile, Dockerfile.dev
 ├── docker-compose.yml, docker-compose.dev.yml

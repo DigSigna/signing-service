@@ -58,6 +58,9 @@ class SQLAlchemySignatureRecordRepository(SignatureRecordRepository):
                 signature_value=record.signature_value,
                 signature_format=record.signature_format,
                 signing_time=record.signing_time,
+                tsa_token=record.tsa_token,
+                tsa_provider=record.tsa_provider,
+                tsa_sealed_at=record.tsa_sealed_at,
             )
         )
         try:
@@ -101,4 +104,7 @@ class SQLAlchemySignatureRecordRepository(SignatureRecordRepository):
                 if request_row.organization_id
                 else None
             ),
+            tsa_provider=signature_row.tsa_provider,
+            tsa_token=signature_row.tsa_token,
+            tsa_sealed_at=signature_row.tsa_sealed_at,
         )

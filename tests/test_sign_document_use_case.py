@@ -21,7 +21,7 @@ from app.domain.ports.output.CertificateClient import (
     ChainValidationResult,
 )
 from app.domain.ports.output.HSMClient import HSMClient
-from app.domain.ports.output.PAdESSigner import PAdESSigner
+from app.domain.ports.output.PAdESSigner import PAdESSigner, PAdESSignResult
 from app.domain.ports.output.SignatureRecordRepository import (
     SignatureRecordRepository,
 )
@@ -171,7 +171,13 @@ class _FakePAdESSigner(PAdESSigner):
         # Still routes through hsm_client, same as the real adapter —
         # lets tests assert the HSM was reached with the right key/token.
         sig = await hsm_client.sign_hash(key_id, b"fake-signed-attrs", bearer_token)
-        return b"SIGNED-PDF:" + sig
+        return PAdESSignResult(
+            signed_document=b"SIGNED-PDF:" + sig,
+            signature_format="PAdES-T",
+            tsa_provider="fake-tsa",
+            tsa_token=b"fake-tsa-token",
+            tsa_sealed_at=datetime.now(timezone.utc),
+        )
 
 
 def _build_use_case(
@@ -217,7 +223,9 @@ async def test_sign_with_pin_issues_new_session_and_signs():
 
     assert result.certificate_id == CERT_ID
     assert result.signature_value == b"SIGNED-PDF:sig-bytes"
-    assert result.signature_format == "PAdES-B"
+    assert result.signature_format == "PAdES-T"
+    assert result.tsa_provider == "fake-tsa"
+    assert result.tsa_sealed_at is not None
     assert result.document_hash == hashlib.sha256(PDF_DOCUMENT).hexdigest()
     assert result.session_token  # a brand-new session token was issued
     assert result.session_expires_at is not None
@@ -372,6 +380,8 @@ async def test_signature_is_persisted_and_findable():
     assert stored.certificate_id == CERT_ID
     assert stored.user_id == USER_ID
     assert stored.signature_value == result.signature_value
+    assert stored.tsa_provider == result.tsa_provider
+    assert stored.tsa_sealed_at == result.tsa_sealed_at
 
 
 # -- signing-plan.md point 2: document_name is metadata only, never an

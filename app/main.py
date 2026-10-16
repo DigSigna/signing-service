@@ -28,6 +28,10 @@ from app.infrastructure.external.certificate.intermediate_cache import (
     IntermediateCertificateCache,
 )
 from app.infrastructure.crypto.pyhanko_pades_signer import PyHankoPAdESSigner
+from app.infrastructure.crypto.fallback_timestamper import (
+    FallbackChainTimeStamper,
+    TsaCandidate,
+)
 from app.infrastructure.external.redis import TokenCache, TokenCacheConfig
 from app.infrastructure.audit.audit_worker import AuditWorker
 from app.infrastructure.audit.factory import new_audit_recorder
@@ -155,7 +159,19 @@ async def startup_event():
             action="certificate_startup_skipped",
         )
 
-    app.state.pades_signer = PyHankoPAdESSigner()
+    tsa_timeout = _parse_seconds(settings.TSA_TIMEOUT, 5.0)
+    tsa_candidates = [
+        TsaCandidate("freetsa", settings.TSA_PRIMARY_URL, tsa_timeout),
+        TsaCandidate("certum", settings.TSA_SECONDARY_URL, tsa_timeout),
+    ]
+    # A factory, not a shared instance — PyHankoPAdESSigner builds a
+    # fresh FallbackChainTimeStamper per sign_pdf() call (see its own
+    # comment on why reusing one across concurrent requests would race).
+    app.state.pades_signer = PyHankoPAdESSigner(
+        timestamper_factory=lambda: FallbackChainTimeStamper.from_candidates(
+            tsa_candidates
+        )
+    )
     logger.info("PAdES signer initialized", action="pades_signer_startup")
 
     if settings.AUDIT_ENABLED:
