@@ -2,7 +2,7 @@
 
 API REST en Python (FastAPI) para firma digital de documentos, multi-tenant, arquitectura hexagonal (ports & adapters). **No opera el HSM ni emite certificados directamente** — delega la operación criptográfica a [`hsm-service`](../hsm-service) vía HTTP y obtiene/valida el certificado del firmante vía [`certificate-service`](../certificate-service) (`GET /certificates/{id}`, `POST /internal/certificates/validate-chain`), reenviando el JWT del caller original (servicios stateless, sin token de servicio fijo).
 
-**Estado actual:** `POST /api/v1/sign` ya firma documentos end-to-end con PAdES real — PAdES-T cuando un TSA (RFC 3161, ADR-002) responde, PAdES-B con fallback a pseudo-timestamp local si no — con PIN/sesión (ADR-005), certificate-service, hsm-service y persistencia. Ver `CLAUDE.md`/`AGENTS.md` y `docs/signing-plan.md` (puntos 1-3 cerrados, 4-7 pendientes). Todavía no hay verificación de firmas ni soporte N-firmantes.
+**Estado actual:** firma de documentos end-to-end con PAdES real — PAdES-T cuando un TSA (RFC 3161, ADR-002) responde, PAdES-B con fallback a pseudo-timestamp local si no — con PIN/sesión (ADR-005), certificate-service, hsm-service y persistencia, para uno (`POST /sign`) o varios firmantes (`POST /signing-requests` + `POST /signing-requests/{id}/sign`, una llamada por firmante). Ver `CLAUDE.md`/`AGENTS.md` y `docs/signing-plan.md` (puntos 1-4 cerrados, 5-7 pendientes). Todavía no hay verificación de firmas.
 
 ## Características
 
@@ -17,7 +17,10 @@ API REST en Python (FastAPI) para firma digital de documentos, multi-tenant, arq
 
 | Método | Ruta | Qué hace |
 |---|---|---|
-| `POST` | `/sign` | Firma un documento (PDF) con un certificado propio (PIN o session_token vigente — ADR-005). Devuelve el PDF firmado completo (`signed_document_b64`); `signature_format` es `PAdES-T` si un TSA selló la firma (RFC 3161, ADR-002, con fallback entre proveedores), o `PAdES-B` si ningún TSA respondió (`tsa_provider="local-pseudo"`) |
+| `POST` | `/sign` | Firma un documento (PDF) con un certificado propio, un solo firmante (PIN o session_token vigente — ADR-005). Azúcar sobre el flujo de abajo (`signers_number=1`, crea y firma en una sola llamada). Devuelve el PDF firmado completo (`signed_document_b64`); `signature_format` es `PAdES-T` si un TSA selló la firma (RFC 3161, ADR-002, con fallback entre proveedores), o `PAdES-B` si ningún TSA respondió (`tsa_provider="local-pseudo"`) |
+| `POST` | `/signing-requests` | Crea un `signing_request` para uno o varios firmantes — recibe el documento una sola vez (`document_b64`, `signers_number`), no firma nada todavía |
+| `POST` | `/signing-requests/{id}/sign` | Agrega la firma incremental de un firmante sobre el estado actual del documento. Si completa `signers_number`, sella con TSA en la misma llamada y marca `status=COMPLETED` |
+| `GET` | `/signing-requests/{id}` | Solo lectura — estado del request y, si ya está `COMPLETED`, el PDF final (`document_b64`) |
 | `GET` | `/health` | Health check (DB + Redis), sin autenticación |
 
 (La verificación de firmas se agregará acá cuando se implemente.)

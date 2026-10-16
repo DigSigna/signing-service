@@ -316,6 +316,104 @@ async def test_sign_pdf_falls_back_to_pseudo_timestamp_when_tsa_unavailable():
 
 
 @pytest.mark.asyncio
+async def test_sign_pdf_with_apply_timestamp_false_skips_tsa_entirely():
+    """signing-plan.md point 4.2: an intermediate signer in a
+    multi-signer request must not even attempt sealing — tsa_provider
+    stays None (not "local-pseudo", which specifically means "attempted
+    and every candidate failed"), even though a TSA *is* configured and
+    would have succeeded if asked."""
+    leaf_key, leaf_pem, inter_pem, root_pem = _make_chain()
+    hsm = _FakeHsmClient(leaf_key)
+    tsa_cert, tsa_key = _make_tsa_identity()
+    signer = PyHankoPAdESSigner(
+        timestamper_factory=lambda: FallbackChainTimeStamper(
+            [("test-tsa", DummyTimeStamper(tsa_cert, tsa_key))]
+        )
+    )
+
+    result = await signer.sign_pdf(
+        document=_minimal_pdf(),
+        leaf_cert_pem=leaf_pem,
+        chain_pems=[inter_pem],
+        key_id=KEY_ID,
+        hsm_client=hsm,
+        bearer_token="caller-jwt",
+        apply_timestamp=False,
+    )
+
+    assert result.signature_format == "PAdES-B"
+    assert result.tsa_provider is None
+    assert result.tsa_token is None
+
+    status = await _trusted_status(result.signed_document, root_pem)
+    assert status.intact is True
+    assert status.valid is True
+    assert status.timestamp_validity is None
+
+
+@pytest.mark.asyncio
+async def test_sign_pdf_two_signers_each_get_their_own_field_and_delta():
+    """A real two-signer sequence (signing-plan.md point 4): the second
+    call signs over the first's output, using a distinct field_name, and
+    only the second (final) call seals with a TSA. Both signatures must
+    independently validate, and the second call's delta
+    (signed_document[len(previous_document):]) must be exactly that
+    signer's contribution — the same math SignIncrementUseCaseImpl uses
+    to compute Signature.signature_value."""
+    leaf_key, leaf_pem, inter_pem, root_pem = _make_chain()
+    hsm = _FakeHsmClient(leaf_key)
+    tsa_cert, tsa_key = _make_tsa_identity()
+    signer = PyHankoPAdESSigner(
+        timestamper_factory=lambda: FallbackChainTimeStamper(
+            [("test-tsa", DummyTimeStamper(tsa_cert, tsa_key))]
+        )
+    )
+    original = _minimal_pdf()
+
+    first = await signer.sign_pdf(
+        document=original,
+        leaf_cert_pem=leaf_pem,
+        chain_pems=[inter_pem],
+        key_id=KEY_ID,
+        hsm_client=hsm,
+        bearer_token="caller-jwt",
+        field_name="Signature1",
+        apply_timestamp=False,
+    )
+    assert first.tsa_provider is None
+
+    second = await signer.sign_pdf(
+        document=first.signed_document,
+        leaf_cert_pem=leaf_pem,
+        chain_pems=[inter_pem],
+        key_id=KEY_ID,
+        hsm_client=hsm,
+        bearer_token="caller-jwt",
+        field_name="Signature2",
+        apply_timestamp=True,
+    )
+    assert second.tsa_provider == "test-tsa"
+    assert second.tsa_token is not None
+
+    delta = second.signed_document[len(first.signed_document) :]
+    assert len(delta) > 0
+    assert first.signed_document + delta == second.signed_document
+
+    reader = PdfFileReader(io.BytesIO(second.signed_document))
+    assert len(reader.embedded_signatures) == 2
+
+    root_cert = next(load_certs_from_pemder_data(root_pem.encode("ascii")))
+    vc = ValidationContext(trust_roots=[root_cert])
+    statuses = [
+        await async_validate_pdf_signature(sig, signer_validation_context=vc)
+        for sig in reader.embedded_signatures
+    ]
+    assert all(s.intact and s.valid and s.trusted for s in statuses)
+    # Exactly one of the two carries a timestamp — the final one.
+    assert sorted(s.timestamp_validity is not None for s in statuses) == [False, True]
+
+
+@pytest.mark.asyncio
 async def test_sign_pdf_rejects_non_pdf_document():
     leaf_key, leaf_pem, inter_pem, _root_pem = _make_chain()
     hsm = _FakeHsmClient(leaf_key)

@@ -39,8 +39,8 @@ una estructura PAdES real embebida en el PDF.
 
 ## 2. `document_name` — tratarlo solo como metadata, nunca como insumo de lógica
 - [x] No usarlo para construir rutas de archivo en disco (riesgo de path traversal). Nunca
-  se usó así — es un `str` que viaja de `SignDocumentCommand` a `SignatureRecord.document_name`
-  sin tocar el filesystem en ningún punto.
+  se usó así — es un `str` que viaja de `SignDocumentCommand`/`CreateSigningRequestCommand`
+  a `SigningRequest.document_name` sin tocar el filesystem en ningún punto.
 - [x] No usarlo para decidir el tipo de procesamiento — detectar el tipo real inspeccionando
   los primeros bytes del archivo recibido (magic bytes: un PDF inicia con `%PDF-`). Rechazar
   con error claro si el contenido no corresponde a un PDF válido, independientemente de lo
@@ -94,55 +94,83 @@ config (`TSA_PRIMARY_URL`), no un rediseño. Ver `platform-docs/security/known-d
   no se construyó el job/endpoint de reintento (explícitamente fuera de alcance, ver texto
   original de este punto y el punto 5).
 
-## 4. Soporte para N firmantes — rediseño del flujo de endpoints
+## 4. Soporte para N firmantes — rediseño del flujo de endpoints ✅ cerrado
 
 **Modelo:** un `signing_request` agrupa el documento y el proceso de firma de varios
 firmantes sobre el mismo archivo; cada `sign` agrega una firma incremental sobre el estado
 actual del documento.
 
-### 4.1 Esquema de datos (nuevo, para `migrations`)
-- [ ] Tabla `signing_requests`: `id` (UUID), `tenant_id`, `document_name`, `signers_number`,
-  `signatures_count` (default 0), `status` (`PENDING` | `COMPLETED` | `PENDING_TSA_RETRY`),
-  `document_blob` (`LONGBLOB`, el PDF en su estado actual/final), `created_at`,
-  `completed_at` (nullable).
-- [ ] `signatures` ya existente: agregar FK `signing_request_id` → `signing_requests.id`
-  (si no existe ya una relación equivalente).
-- [ ] Nueva migración con su `.down.sql` correspondiente, siguiendo el patrón ya establecido
-  en el repo `migrations` (triggers/procedures donde aplique, revisar `AGENTS.md` del repo).
+**Dos hallazgos reales durante la implementación, no anticipados por este plan** (ver
+`CLAUDE.md`/`AGENTS.md` para el detalle completo):
+- `signatures` tenía una `UNIQUE KEY` real sobre `signing_request_id` (1:1 desde la
+  migración 003) — el punto 4.1 de abajo decía "agregar FK si no existe ya una relación
+  equivalente" asumiendo que podía no estar; sí estaba, y además como restricción más
+  fuerte que una FK (impedía directamente más de una fila por request). Migración 026 la
+  relaja a un índice simple.
+- `idempotency_keys` es única sobre `(tenant_id, request_id)` solamente, no también
+  `operation` — un mismo `request_id` de cliente no puede reclamar dos operaciones
+  distintas. Esto bloqueaba la idea obvia de implementar `/sign` componiendo dos llamadas
+  separadamente idempotentes ("crear" + "firmar"); se resolvió con un módulo de lógica
+  compartida (`signing_core.py`) que no toca idempotencia, y cada endpoint público envuelve
+  un único claim alrededor de lo que necesite.
 
-### 4.2 Endpoints
-- [ ] **`POST /signing-requests`** — crea el `signing_request`. Recibe `document_b64`
-  (una sola vez), `document_name`, `signers_number`. Guarda el documento en
-  `document_blob`, estado `PENDING`, `signatures_count = 0`. Responde `signing_request_id`.
-- [ ] **`POST /signing-requests/{id}/sign`** — reemplaza al endpoint actual de firma única.
-  Recibe `certificate_id` + `pin` (+ `session_token` si aplica por ADR-005) — **ya no recibe
-  `document_b64`**. Lee `document_blob` actual desde la BD, agrega la firma incremental de
-  ese firmante sobre el estado actual (no sobre el original ni sobre una copia nueva),
-  actualiza `document_blob`, incrementa `signatures_count`.
-  - [ ] Si `signatures_count == signers_number` tras esta firma: dispara en el mismo request
-    el sellado TSA (punto 3) y marca `status = COMPLETED`, `completed_at = now()`. Esto es la
-    finalización real del proceso — nunca disparada por un GET.
-  - [ ] Debe seguir idempotente vía `Idempotency-Key` (ADR-004) — reintentar esta llamada no
-    debe producir una firma duplicada del mismo firmante.
-- [ ] **`GET /signing-requests/{id}`** — solo lectura, sin efectos secundarios. Devuelve
-  `status`, `signatures_count`/`signers_number`, y si `status == COMPLETED`, el documento
-  final como `document_b64` directo en la respuesta (no generar URLs firmadas ni
-  almacenamiento de objetos — no se necesita esa infraestructura a esta escala). Si no está
-  completo, devuelve el estado de avance sin el documento final.
+### 4.1 Esquema de datos (nuevo, para `migrations`) ✅
+- [x] Tabla `signing_requests` ampliada (ya existía desde la migración 003, no se creó de
+  cero): migración 026 agrega `signers_number`, `signatures_count` (default 0), `status`
+  (ENUM ampliado con `COMPLETED`/`PENDING_TSA_RETRY`, manteniendo los valores legacy),
+  `document_blob` (`LONGBLOB`), `completed_at` (nullable), y `version` (INT, no estaba en
+  este plan — necesario para el bloqueo optimista del punto 4.2, ver más abajo).
+- [x] `signatures`: la FK a `signing_requests.id` ya existía; lo que hacía falta era relajar
+  su `UNIQUE KEY` 1:1 a un índice simple (ver hallazgo arriba) — `026_add_n_signer_support.
+  {up,down}.sql`, verificada up→down→up contra la base de dev real.
 
-### 4.3 Reemplazo de la ruta actual
-- [ ] El endpoint de un solo firmante actual puede quedar como azúcar sintáctico sobre este
-  flujo (`signers_number = 1`, crear + firmar en una sola llamada combinada) si se quiere
-  mantener compatibilidad simple para el caso de un solo firmante — decisión de conveniencia,
-  no bloqueante.
+### 4.2 Endpoints ✅
+- [x] **`POST /signing-requests`** — `CreateSigningRequestUseCaseImpl`. Tal como se
+  describió: guarda el documento en `document_blob`, estado `PENDING`, `signatures_count=0`.
+- [x] **`POST /signing-requests/{id}/sign`** — `SignIncrementUseCaseImpl`. Lee
+  `document_blob` actual, agrega la firma incremental de ese firmante (con un `field_name`
+  distinto por firmante — pyHanko lo exige), actualiza `document_blob`, incrementa
+  `signatures_count`.
+  - [x] Si esta firma completa `signers_number`: sella con TSA (punto 3,
+    `apply_timestamp=True` solo en esta llamada) y marca `status=COMPLETED`,
+    `completed_at=now()`, en el mismo request.
+  - [x] Idempotente vía `claim_idempotency_key`/`X-Request-ID`, igual que el resto del
+    servicio — `resource_id` es el id de la *firma*, no del `signing_request` (un request
+    puede tener más de una firma, a diferencia de antes).
+  - [x] **Agregado, no estaba en este plan**: bloqueo optimista (`signing_requests.version`)
+    — dos llamadas a este endpoint sobre el mismo id, en simultáneo, no deben poder pisarse
+    la una a la otra vía last-write-wins sobre `document_blob`/`signatures_count` (perdería
+    silenciosamente la firma de un firmante aunque hsm-service ya la hubiera producido).
+    `SigningRequestConflictError` (409) si pierde la carrera — el cliente reintenta, nunca
+    reintentado solo del lado del servidor (podría re-disparar PIN/HSM/TSA innecesariamente).
+- [x] **`GET /signing-requests/{id}`** — `GetSigningRequestUseCaseImpl`, solo lectura, tal
+  como se describió. `document_b64` solo presente si `status == COMPLETED`.
 
-## 5. "Obtener copia de un documento ya firmado"
-- [ ] No implementar ningún mecanismo de "reconstrucción desde `signatures`" — la fila de
-  `signatures` solo debe usarse para trazabilidad (encontrar a qué `signing_request_id`
-  pertenece). La copia se obtiene siempre vía `GET /signing-requests/{id}`, que lee
-  `document_blob` tal como está guardado.
-- [ ] No construir snapshots por firmante (documento "tal como estaba cuando firmé") salvo
-  que surja un requisito real explícito — no especular esto ahora.
+### 4.3 Reemplazo de la ruta actual ✅
+- [x] `POST /api/v1/sign` quedó como azúcar sintáctico (`signers_number=1`, crea y firma en
+  una sola llamada) — `SignDocumentUseCaseImpl` compone los mismos helpers de
+  `signing_core.py` que los dos endpoints nuevos, nunca un camino de código paralelo.
+  Contrato de request/response sin cambios para los callers existentes.
+
+**Decisión no anticipada por este plan, tomada durante la implementación:**
+`signatures.signature_value` para filas nuevas ya no es el PDF completo (sí lo sigue siendo
+para filas viejas, pre-026, de un solo firmante) — es solo el delta incremental que esa
+firma agregó (`nuevo_pdf[len(pdf_anterior):]`, exacto porque los incremental updates de PDF
+son estrictamente append-only). Esto es justamente lo que pide el punto 5 de abajo ("no
+construir snapshots por firmante"): guardar el PDF completo en cada fila de `signatures`
+sería exactamente ese snapshot. El único PDF completo vigente vive en
+`signing_requests.document_blob`; `/sign` sigue devolviendo el PDF completo en su respuesta,
+leído de ahí, no de `signature_value`.
+
+## 5. "Obtener copia de un documento ya firmado" ✅ cerrado (satisfecho por el punto 4)
+- [x] No se implementó ningún mecanismo de "reconstrucción desde `signatures`" —
+  `GetSigningRequestUseCaseImpl` lee `document_blob` directo, nunca reconstruye nada a
+  partir de filas de `signatures`. Esas filas solo sirven para trazabilidad (encontrar a
+  qué `signing_request_id` pertenece una firma — `find_signature_by_id`, usado solo para
+  replay de idempotencia).
+- [x] No se construyeron snapshots por firmante — ver la decisión de `signature_value`
+  documentada al cierre del punto 4: cada fila de `signatures` guarda solo su delta
+  incremental, nunca un PDF completo "tal como estaba cuando firmé".
 
 ## 6. Seguridad — checklist final antes de cerrar v1
 - [ ] Confirmar que el servicio nunca acepta un hash pre-calculado por el cliente como

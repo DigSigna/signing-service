@@ -1,4 +1,5 @@
 import hashlib
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 from uuid import UUID, uuid4
@@ -6,7 +7,8 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.application.use_cases.sign_document import SignDocumentUseCaseImpl
-from app.domain.entities.SignatureRecord import SignatureRecord
+from app.domain.entities.Signature import Signature
+from app.domain.entities.SigningRequest import SigningRequest
 from app.domain.entities.SigningSession import SigningSession
 from app.domain.exceptions.domain_errors import (
     CertificateChainInvalidError,
@@ -22,13 +24,14 @@ from app.domain.ports.output.CertificateClient import (
 )
 from app.domain.ports.output.HSMClient import HSMClient
 from app.domain.ports.output.PAdESSigner import PAdESSigner, PAdESSignResult
-from app.domain.ports.output.SignatureRecordRepository import (
-    SignatureRecordRepository,
-)
 from app.domain.ports.output.SigningPinVerifier import SigningPinVerifier
+from app.domain.ports.output.SigningRequestRepository import (
+    SigningRequestRepository,
+)
 from app.domain.ports.output.SigningSessionRepository import SigningSessionRepository
 from app.domain.valueobjects.IdentityContext import IdentityContext
 from app.domain.valueobjects.OwnerType import OwnerType
+from app.domain.valueobjects.SigningRequestStatus import SigningRequestStatus
 from app.infrastructure.external.certificate.intermediate_cache import (
     IntermediateCertificateCache,
 )
@@ -122,15 +125,44 @@ class _FakeSessionRepository(SigningSessionRepository):
         return session.signature_count
 
 
-class _FakeSignatureRepository(SignatureRecordRepository):
+class _FakeSigningRequestRepository(SigningRequestRepository):
     def __init__(self):
-        self._by_id: Dict[UUID, SignatureRecord] = {}
+        self._requests: Dict[UUID, SigningRequest] = {}
+        self._signatures: Dict[UUID, Signature] = {}
 
-    async def create(self, record: SignatureRecord) -> None:
-        self._by_id[record.id] = record
+    async def create(self, request: SigningRequest) -> None:
+        self._requests[request.id] = request
 
-    async def find_by_id(self, signing_request_id: UUID) -> Optional[SignatureRecord]:
-        return self._by_id.get(signing_request_id)
+    async def find_by_id(self, signing_request_id: UUID) -> Optional[SigningRequest]:
+        # A copy, not the stored reference — see
+        # test_sign_increment_use_case.py's identical fake for why
+        # aliasing here would double-apply perform_signature_step's own
+        # post-append bookkeeping on top of append_signature's.
+        request = self._requests.get(signing_request_id)
+        return replace(request) if request is not None else None
+
+    async def find_signature_by_id(self, signature_id: UUID) -> Optional[Signature]:
+        return self._signatures.get(signature_id)
+
+    async def append_signature(
+        self,
+        signing_request_id: UUID,
+        expected_version: int,
+        new_document_blob: bytes,
+        new_status: SigningRequestStatus,
+        completed_at,
+        signature: Signature,
+    ) -> bool:
+        request = self._requests[signing_request_id]
+        if request.version != expected_version:
+            return False
+        request.document_blob = new_document_blob
+        request.signatures_count += 1
+        request.status = new_status
+        request.completed_at = completed_at
+        request.version += 1
+        self._signatures[signature.id] = signature
+        return True
 
 
 class _FakeHSMClient(HSMClient):
@@ -155,24 +187,41 @@ class _FakeHSMClient(HSMClient):
 class _FakePAdESSigner(PAdESSigner):
     """Real PDF/PAdES correctness is covered end-to-end by
     test_pyhanko_pades_signer.py — this fake keeps these tests focused
-    on SignDocumentUseCaseImpl's own orchestration (ordering, error
-    propagation, idempotency), without needing real PDF/cert fixtures
-    for every case."""
+    on the use cases' own orchestration (ordering, error propagation,
+    idempotency), without needing real PDF/cert fixtures for every
+    case. Appends fixed bytes to `document` rather than replacing it
+    outright, so signing_core's delta computation
+    (new[len(old):]) behaves the same way it would against a real
+    incremental PDF update."""
 
     def __init__(self):
         self.calls = []
 
     async def sign_pdf(
-        self, document, leaf_cert_pem, chain_pems, key_id, hsm_client, bearer_token
+        self,
+        document,
+        leaf_cert_pem,
+        chain_pems,
+        key_id,
+        hsm_client,
+        bearer_token,
+        field_name="Signature1",
+        apply_timestamp=True,
     ):
         self.calls.append(
             (document, leaf_cert_pem, tuple(chain_pems), key_id, bearer_token)
         )
-        # Still routes through hsm_client, same as the real adapter —
-        # lets tests assert the HSM was reached with the right key/token.
         sig = await hsm_client.sign_hash(key_id, b"fake-signed-attrs", bearer_token)
+        if not apply_timestamp:
+            return PAdESSignResult(
+                signed_document=document + b"SIGNED-PDF:" + sig,
+                signature_format="PAdES-B",
+                tsa_provider=None,
+                tsa_token=None,
+                tsa_sealed_at=datetime.now(timezone.utc),
+            )
         return PAdESSignResult(
-            signed_document=b"SIGNED-PDF:" + sig,
+            signed_document=document + b"SIGNED-PDF:" + sig,
             signature_format="PAdES-T",
             tsa_provider="fake-tsa",
             tsa_token=b"fake-tsa-token",
@@ -184,7 +233,7 @@ def _build_use_case(
     certificate_client=None,
     pin_verifier=None,
     session_repo=None,
-    signature_repo=None,
+    signing_request_repo=None,
     hsm_client=None,
     pades_signer=None,
 ):
@@ -193,7 +242,7 @@ def _build_use_case(
         certificate_client=certificate_client,
         pin_verifier=pin_verifier or _FakePinVerifier(),
         session_repo=session_repo or _FakeSessionRepository(),
-        signature_repo=signature_repo or _FakeSignatureRepository(),
+        signing_request_repo=signing_request_repo or _FakeSigningRequestRepository(),
         hsm_client=hsm_client or _FakeHSMClient(),
         pades_signer=pades_signer or _FakePAdESSigner(),
         intermediate_cache=IntermediateCertificateCache(
@@ -222,7 +271,7 @@ async def test_sign_with_pin_issues_new_session_and_signs():
     result = await use_case.execute(command, _identity(), bearer_token="caller-jwt")
 
     assert result.certificate_id == CERT_ID
-    assert result.signature_value == b"SIGNED-PDF:sig-bytes"
+    assert result.signature_value == PDF_DOCUMENT + b"SIGNED-PDF:sig-bytes"
     assert result.signature_format == "PAdES-T"
     assert result.tsa_provider == "fake-tsa"
     assert result.tsa_sealed_at is not None
@@ -230,9 +279,10 @@ async def test_sign_with_pin_issues_new_session_and_signs():
     assert result.session_token  # a brand-new session token was issued
     assert result.session_expires_at is not None
 
-    # The use case hands the signer the original document (the signer
-    # itself decides what actually goes to hsm-service — see
-    # test_pyhanko_pades_signer.py for that boundary).
+    # The use case hands the signer the current document state (here,
+    # the original document — this is a single-signer request) — the
+    # signer itself decides what actually goes to hsm-service, see
+    # test_pyhanko_pades_signer.py for that boundary.
     assert pades_signer.calls == [(PDF_DOCUMENT, "pem", (), KEY_ID, "caller-jwt")]
     assert hsm.calls == [(KEY_ID, b"fake-signed-attrs", "caller-jwt")]
     assert pin_verifier.calls == [(CERT_ID, "193042", "caller-jwt")]
@@ -367,21 +417,31 @@ async def test_pin_failure_never_reaches_hsm():
 
 @pytest.mark.asyncio
 async def test_signature_is_persisted_and_findable():
-    signature_repo = _FakeSignatureRepository()
-    use_case = _build_use_case(signature_repo=signature_repo)
+    signing_request_repo = _FakeSigningRequestRepository()
+    use_case = _build_use_case(signing_request_repo=signing_request_repo)
     command = SignDocumentCommand(
         certificate_id=CERT_ID, document=PDF_DOCUMENT, pin="193042"
     )
 
     result = await use_case.execute(command, _identity(), bearer_token="caller-jwt")
 
-    stored = await signature_repo.find_by_id(result.signing_request_id)
-    assert stored is not None
-    assert stored.certificate_id == CERT_ID
-    assert stored.user_id == USER_ID
-    assert stored.signature_value == result.signature_value
-    assert stored.tsa_provider == result.tsa_provider
-    assert stored.tsa_sealed_at == result.tsa_sealed_at
+    stored_request = await signing_request_repo.find_by_id(result.signing_request_id)
+    stored_signature = await signing_request_repo.find_signature_by_id(
+        result.signature_id
+    )
+    assert stored_request is not None
+    assert stored_request.status == SigningRequestStatus.COMPLETED
+    assert stored_request.document_blob == result.signature_value
+    assert stored_signature.certificate_id == CERT_ID
+    assert stored_request.user_id == USER_ID
+    assert stored_signature.tsa_provider == result.tsa_provider
+    assert stored_signature.tsa_sealed_at == result.tsa_sealed_at
+    # The signature row holds only this signer's delta, not a redundant
+    # full-document snapshot (signing-plan.md point 5): _FakePAdESSigner
+    # appends "SIGNED-PDF:" + the HSM signature to the input document,
+    # so that suffix is exactly the delta a real incremental PDF update
+    # would also produce.
+    assert stored_signature.signature_value == b"SIGNED-PDF:signature-bytes"
 
 
 # -- signing-plan.md point 2: document_name is metadata only, never an
@@ -412,8 +472,8 @@ async def test_document_name_is_stored_verbatim_as_inert_text():
     """A path-traversal-shaped document_name is accepted and persisted
     unchanged — it is never interpreted as a filesystem path or used to
     pick a code path, only displayed/audited as text."""
-    signature_repo = _FakeSignatureRepository()
-    use_case = _build_use_case(signature_repo=signature_repo)
+    signing_request_repo = _FakeSigningRequestRepository()
+    use_case = _build_use_case(signing_request_repo=signing_request_repo)
     traversal_name = "../../../etc/passwd"
     command = SignDocumentCommand(
         certificate_id=CERT_ID,
@@ -424,5 +484,5 @@ async def test_document_name_is_stored_verbatim_as_inert_text():
 
     result = await use_case.execute(command, _identity(), bearer_token="caller-jwt")
 
-    stored = await signature_repo.find_by_id(result.signing_request_id)
-    assert stored.document_name == traversal_name
+    stored_request = await signing_request_repo.find_by_id(result.signing_request_id)
+    assert stored_request.document_name == traversal_name

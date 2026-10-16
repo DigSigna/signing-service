@@ -41,7 +41,6 @@ from app.domain.ports.output.HSMClient import HSMClient
 from app.domain.ports.output.PAdESSigner import PAdESSigner, PAdESSignResult
 from app.infrastructure.crypto.fallback_timestamper import AllTsaProvidersFailedError
 
-_FIELD_NAME = "Signature1"  # v1 is single-signer; no collision risk yet.
 _DIGEST_ALGORITHM = "sha256"  # must match hsm-service's fixed mechanism.
 _PDF_MAGIC = b"%PDF-"
 _LOCAL_PSEUDO_PROVIDER = "local-pseudo"
@@ -126,6 +125,8 @@ class PyHankoPAdESSigner(PAdESSigner):
         key_id: UUID,
         hsm_client: HSMClient,
         bearer_token: str,
+        field_name: str = "Signature1",
+        apply_timestamp: bool = True,
     ) -> PAdESSignResult:
         if not document.startswith(_PDF_MAGIC):
             raise ValidationError(
@@ -152,38 +153,53 @@ class PyHankoPAdESSigner(PAdESSigner):
             )
 
         metadata = PdfSignatureMetadata(
-            field_name=_FIELD_NAME,
+            field_name=field_name,
             md_algorithm=_DIGEST_ALGORITHM,
             subfilter=SigSeedSubFilter.PADES,
         )
 
-        # A fresh TimeStamper per call, never a shared/reused instance:
-        # pyHanko's own dry-run size-estimation pass also calls it
-        # (TimeStamper.async_dummy_response), and FallbackChainTimeStamper
-        # tracks which delegate won as *instance* state, read right
-        # after async_sign_pdf() returns — sharing one across concurrent
-        # requests would let one request's result clobber another's
-        # between the real call and the read, since async_sign_pdf
-        # awaits multiple times after obtaining the token.
-        timestamper = self._timestamper_factory() if self._timestamper_factory else None
-
-        try:
-            out = await self._attempt(document, metadata, _build_signer(), timestamper)
-        except AllTsaProvidersFailedError:
-            # Every TSA candidate failed: fall back to an un-timestamped
-            # PAdES-B signature rather than blocking the signing
-            # operation (signing-plan.md point 3). A fresh writer/signer
-            # for the retry — the failed attempt's writer may already
-            # have mutated internal state.
+        if not apply_timestamp:
+            # An intermediate signer in a multi-signer request
+            # (signing-plan.md point 4.2) — sealing is deferred to
+            # whichever call completes the request. Nothing was
+            # attempted, so tsa_provider/tsa_token stay None rather than
+            # "local-pseudo" (that string specifically means "attempted
+            # and every TSA failed").
             out = await self._attempt(document, metadata, _build_signer(), None)
-            tsa_provider, tsa_token = _LOCAL_PSEUDO_PROVIDER, None
+            tsa_provider, tsa_token = None, None
         else:
-            provider = getattr(timestamper, "last_provider", None)
-            if provider is not None:
-                tsa_provider = provider
-                tsa_token = getattr(timestamper, "last_token_der", None)
-            else:
+            # A fresh TimeStamper per call, never a shared/reused
+            # instance: pyHanko's own dry-run size-estimation pass also
+            # calls it (TimeStamper.async_dummy_response), and
+            # FallbackChainTimeStamper tracks which delegate won as
+            # *instance* state, read right after async_sign_pdf()
+            # returns — sharing one across concurrent requests would
+            # let one request's result clobber another's between the
+            # real call and the read, since async_sign_pdf awaits
+            # multiple times after obtaining the token.
+            timestamper = (
+                self._timestamper_factory() if self._timestamper_factory else None
+            )
+            try:
+                out = await self._attempt(
+                    document, metadata, _build_signer(), timestamper
+                )
+            except AllTsaProvidersFailedError:
+                # Every TSA candidate failed: fall back to an
+                # un-timestamped PAdES-B signature rather than blocking
+                # the signing operation (signing-plan.md point 3). A
+                # fresh writer/signer for the retry — the failed
+                # attempt's writer may already have mutated internal
+                # state.
+                out = await self._attempt(document, metadata, _build_signer(), None)
                 tsa_provider, tsa_token = _LOCAL_PSEUDO_PROVIDER, None
+            else:
+                provider = getattr(timestamper, "last_provider", None)
+                if provider is not None:
+                    tsa_provider = provider
+                    tsa_token = getattr(timestamper, "last_token_der", None)
+                else:
+                    tsa_provider, tsa_token = _LOCAL_PSEUDO_PROVIDER, None
 
         signature_format = (
             _FORMAT_WITH_TIMESTAMP

@@ -24,10 +24,14 @@ class PAdESSignResult:
     # migration-003 ENUM only had PKCS7/CMS/RAW/JWS, none of which
     # describe a PAdES signature at all).
     signature_format: str
-    # None when no real TSA could be reached (signing-plan.md point 3):
-    # a local pseudo-timestamp was used instead, and tsa_token stays
-    # None rather than holding something that looks like a real RFC
-    # 3161 token but isn't one.
+    # None when apply_timestamp=False (an intermediate signer in a
+    # multi-signer request — sealing is deferred to whichever call
+    # completes the request, signing-plan.md point 4.2) or when no real
+    # TSA could be reached (point 3): in the latter case a local
+    # pseudo-timestamp was used instead, and tsa_token stays None rather
+    # than holding something that looks like a real RFC 3161 token but
+    # isn't one. Callers tell the two apart via apply_timestamp, not
+    # this field alone.
     tsa_provider: Optional[str]
     tsa_token: Optional[bytes]
     tsa_sealed_at: datetime
@@ -43,14 +47,25 @@ class PAdESSigner(ABC):
         key_id: UUID,
         hsm_client: HSMClient,
         bearer_token: str,
+        field_name: str = "Signature1",
+        apply_timestamp: bool = True,
     ) -> PAdESSignResult:
-        """Produces the complete signed PDF (the original document plus
-        an incremental update containing the PAdES-B signature) and
-        attempts to timestamp the signature itself (ADR-002/signing-
-        plan.md point 3) — never the document or its hash, and only
-        ever *after* signing, since a signature timestamp's message
-        imprint is computed over the signature value, which doesn't
-        exist beforehand.
+        """Produces the complete signed PDF (`document` plus a new
+        incremental update containing this PAdES-B signature field) and,
+        if apply_timestamp, attempts to timestamp the signature itself
+        (ADR-002/signing-plan.md point 3) — never the document or its
+        hash, and only ever *after* signing, since a signature
+        timestamp's message imprint is computed over the signature
+        value, which doesn't exist beforehand.
+
+        field_name must be unique within `document` — a multi-signer
+        request (signing-plan.md point 4) calls this once per signer,
+        each time over the previous call's output, and each call adds
+        its own signature field. apply_timestamp=False skips the TSA
+        entirely (PAdESSignResult.tsa_provider/tsa_token come back None,
+        not "local-pseudo" — nothing was attempted, there is nothing to
+        report as having failed): a multi-signer request only seals the
+        *final* signature (point 4.2), earlier ones pass False.
 
         If every configured TSA is unreachable, this does not fail or
         block the signature: it falls back to a local pseudo-timestamp

@@ -303,6 +303,30 @@ class HsmOperationError(HsmError):
 
 
 @dataclass
+class SigningRequestNotPendingError(DomainError):
+    """Raised by SignIncrementUseCaseImpl when the signing_request is no
+    longer PENDING (already COMPLETED, or CANCELLED/EXPIRED/FAILED) —
+    distinct from NotFoundError (wrong id / wrong tenant)."""
+
+    code: ClassVar[str] = "SIGNING_REQUEST_NOT_PENDING"
+    http_status: ClassVar[int] = 409
+
+    current_status: Optional[str] = None
+
+
+@dataclass
+class SigningRequestConflictError(DomainError):
+    """Raised when SigningRequestRepository.append_signature loses the
+    optimistic-concurrency race (signing-plan.md point 4) — another
+    /sign call on the same signing_request_id committed first. The
+    client should retry the whole call (fresh PIN/session resolution),
+    never silently retried server-side."""
+
+    code: ClassVar[str] = "SIGNING_REQUEST_CONFLICT"
+    http_status: ClassVar[int] = 409
+
+
+@dataclass
 class AuditError(DomainError):
     """Base class for audit transport errors."""
 
