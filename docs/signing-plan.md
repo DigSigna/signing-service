@@ -38,13 +38,23 @@ una estructura PAdES real embebida en el PDF.
   XAdES/CAdES, pero quedan fuera de esta versión — no implementarlos ahora).
 
 ## 2. `document_name` — tratarlo solo como metadata, nunca como insumo de lógica
-- [ ] No usarlo para construir rutas de archivo en disco (riesgo de path traversal).
-- [ ] No usarlo para decidir el tipo de procesamiento — detectar el tipo real inspeccionando
+- [x] No usarlo para construir rutas de archivo en disco (riesgo de path traversal). Nunca
+  se usó así — es un `str` que viaja de `SignDocumentCommand` a `SignatureRecord.document_name`
+  sin tocar el filesystem en ningún punto.
+- [x] No usarlo para decidir el tipo de procesamiento — detectar el tipo real inspeccionando
   los primeros bytes del archivo recibido (magic bytes: un PDF inicia con `%PDF-`). Rechazar
   con error claro si el contenido no corresponde a un PDF válido, independientemente de lo
-  que diga `document_name`.
-- [ ] Guardarlo únicamente como columna de texto en `signing_requests`, para
-  display/auditoría humana.
+  que diga `document_name`. Ya implementado como parte del punto 1 (`SignDocumentUseCaseImpl.
+  execute()`, chequeo `%PDF-` antes de cualquier otra cosa) — `PyHankoPAdESSigner.sign_pdf()`
+  tiene el mismo chequeo como segunda capa.
+- [x] Guardarlo únicamente como columna de texto en `signing_requests`, para
+  display/auditoría humana. Confirmado: único uso es `signing_requests.document_name`.
+
+Las tres cajas ya estaban satisfechas por la implementación del punto 1 — no hizo falta
+código nuevo, solo verificación. Tests de regresión agregados para que esto no se rompa sin
+aviso: `test_document_name_cannot_override_the_real_content_check` (un `document_name` que
+miente sobre el contenido no cambia el resultado) y `test_document_name_is_stored_verbatim_as_inert_text`
+(un `document_name` con forma de path traversal se persiste como texto plano, sin efecto alguno).
 
 ## 3. Integración real con el TSA (ADR-002) — pendiente, no cosmético
 - [ ] Implementar cliente HTTP hacia el TSA primario (ANF AC free tier), con fallback a

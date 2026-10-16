@@ -372,3 +372,47 @@ async def test_signature_is_persisted_and_findable():
     assert stored.certificate_id == CERT_ID
     assert stored.user_id == USER_ID
     assert stored.signature_value == result.signature_value
+
+
+# -- signing-plan.md point 2: document_name is metadata only, never an
+# input to logic or file paths. -----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_document_name_cannot_override_the_real_content_check():
+    """A document_name that lies about the content ("contrato.pdf") must
+    not change the outcome — only the actual bytes decide whether this
+    is a PDF."""
+    use_case = _build_use_case()
+    command = SignDocumentCommand(
+        certificate_id=CERT_ID,
+        document=b"not a pdf at all",
+        document_name="contrato.pdf",
+        pin="193042",
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        await use_case.execute(command, _identity(), bearer_token="caller-jwt")
+
+    assert exc_info.value.field == "document_b64"
+
+
+@pytest.mark.asyncio
+async def test_document_name_is_stored_verbatim_as_inert_text():
+    """A path-traversal-shaped document_name is accepted and persisted
+    unchanged — it is never interpreted as a filesystem path or used to
+    pick a code path, only displayed/audited as text."""
+    signature_repo = _FakeSignatureRepository()
+    use_case = _build_use_case(signature_repo=signature_repo)
+    traversal_name = "../../../etc/passwd"
+    command = SignDocumentCommand(
+        certificate_id=CERT_ID,
+        document=PDF_DOCUMENT,
+        document_name=traversal_name,
+        pin="193042",
+    )
+
+    result = await use_case.execute(command, _identity(), bearer_token="caller-jwt")
+
+    stored = await signature_repo.find_by_id(result.signing_request_id)
+    assert stored.document_name == traversal_name
