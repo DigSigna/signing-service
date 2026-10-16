@@ -4,8 +4,13 @@
 primera versión funcional de `signing-service` (firma de documento único vía HSM, PIN de
 firma y sesión de firma ya implementados). Los puntos abajo son decisiones de diseño ya
 tomadas y acordadas — no hay que re-discutirlas, solo implementarlas. Referencian ADRs ya
-existentes en `platform-docs` (ADR-002, ADR-003, ADR-004, ADR-005) y la migración 016 de
-`migrations` (`tsa_token`, `tsa_provider`, `tsa_sealed_at` en `signatures`).
+existentes en `platform-docs` (ADR-002, ADR-003, ADR-005) y la migración 016 de
+`migrations` (`tsa_token`, `tsa_provider`, `tsa_sealed_at` en `signatures`). **Nota (punto 7,
+cierre):** no existe un "ADR-004" separado de ADR-005 — el archivo se llama
+`ADR-004-application-level-signing-PIN-...md` pero su título interno es `ADR-005`; es una
+irregularidad de numeración en `platform-docs`, no un documento faltante. Cualquier
+referencia a "ADR-004" en este archivo antes del punto 7 (herencia de una versión anterior
+de este plan) se refiere a ese mismo documento.
 
 ---
 
@@ -172,22 +177,46 @@ leído de ahí, no de `signature_value`.
   documentada al cierre del punto 4: cada fila de `signatures` guarda solo su delta
   incremental, nunca un PDF completo "tal como estaba cuando firmé".
 
-## 6. Seguridad — checklist final antes de cerrar v1
-- [ ] Confirmar que el servicio nunca acepta un hash pre-calculado por el cliente como
-  sustituto de `document_b64`.
-- [ ] Confirmar que `document_name` no se usa en ninguna ruta de filesystem ni en lógica de
-  bifurcación de formato.
-- [ ] Confirmar rate-limiting/lockout en la verificación del PIN de firma (ADR-005) —
-  si no está implementado todavía, es bloqueante antes de cerrar v1, no opcional.
-- [ ] Confirmar que `signing-service` no guarda el PIN de firma en ninguna forma recuperable
-  (solo hash), y que no existe ningún mecanismo de "autocompletar"/regenerar el PIN sin que
-  el usuario lo reingrese — ver ADR-005, sección de anti-patrón explícitamente rechazado.
+## 6. Seguridad — checklist final antes de cerrar v1 ✅ cerrado
 
-## 7. Documentación y cierre
-- [ ] `README.md`/`AGENTS.md` de `signing-service` (si no existen) documentando: el flujo de
-  N firmantes, la referencia a ADR-002/003/004/005, y la nota de que el formato soportado en
-  v1 es solo PAdES.
-- [ ] CI básico (reusar patrón ya establecido en `hsm-service`/`certificate-service`).
-- [ ] Una vez cerrado: actualizar `security/known-deviations.md` en `platform-docs` si queda
-  algún gap consciente (ej. XAdES/CAdES pendientes, reintentos de TSA manuales en vez de
-  automáticos) — no cerrar la deuda en silencio, documentarla igual que las anteriores.
+Las cuatro cajas eran una auditoría de lo ya construido, no trabajo nuevo — las cuatro
+estaban satisfechas, verificadas leyendo el código real (incluido el de `certificate-service`
+para la 3ª, que no vive en este repo):
+
+- [x] El servicio nunca acepta un hash pre-calculado — `SignDocumentRequest`,
+  `CreateSigningRequestRequest` solo tienen `document_b64` (el documento completo); no existe
+  ningún campo de hash en ningún schema de entrada, y `require_pdf()`/`PyHankoPAdESSigner.
+  sign_pdf()` chequean los bytes reales (`%PDF-`) antes de cualquier otra cosa.
+- [x] `document_name` nunca se usa en rutas de filesystem ni en lógica de bifurcación de
+  formato — confirmado en el punto 2 (cerrado), con tests de regresión
+  (`test_document_name_cannot_override_the_real_content_check`,
+  `test_document_name_is_stored_verbatim_as_inert_text`).
+- [x] Rate-limiting/lockout del PIN **sí está implementado** — en `certificate-service`
+  (dueño del PIN): `Certificate.apply_failed_pin_attempt()`
+  (`app/domain/entities/Certificate.py`) aplica backoff exponencial (dobla desde
+  `base_lockout` en cada ciclo de `max_attempts` fallos consecutivos) sin reinicio salvo
+  reset explícito, respaldado por `increment_failed_pin_attempts`/`set_pin_lockout` en
+  `CertificateRepository` (actualización atómica, no pisa el resto de la fila). El PIN se
+  guarda con bcrypt (`bcrypt_pin_hasher.py`). `signing-service` solo traduce los códigos de
+  error (`SigningPinInvalidError.remaining_attempts`, `SigningPinLockedError.locked_until`)
+  — no implementa su propio rate-limiting porque no es quien posee el estado del PIN.
+- [x] `signing-service` nunca guarda el PIN — el parámetro `pin` viaja como argumento de
+  función desde `SignIncrementRequest`/`SignDocumentRequest` hasta
+  `SigningPinVerifier.verify()` (una llamada HTTP a certificate-service) y nunca se escribe
+  en ninguna tabla, log, ni variable de instancia de este servicio. No existe ningún
+  endpoint de set/reset de PIN en `signing-service` (esa responsabilidad es enteramente de
+  `certificate-service`) — por lo tanto tampoco existe ningún mecanismo de
+  "autocompletar"/regenerar.
+
+## 7. Documentación y cierre ✅ cerrado
+- [x] `README.md`/`CLAUDE.md`/`AGENTS.md` documentan el flujo de N firmantes (punto 4) y
+  ahora también una sección explícita de ADRs (`README.md` → "Decisiones de arquitectura") con
+  ADR-002/003/005 y la nota de que v1 solo soporta PAdES (DLT-011 decide también XAdES/CAdES,
+  fuera de alcance — ver KD-013 abajo). "ADR-004" no existe como documento separado de
+  ADR-005 — ver nota al principio de este archivo.
+- [x] CI básico — ya existía (`.github/workflows/ci.yml`), mismo patrón que
+  `hsm-service`/`certificate-service` (job `quality` bloqueante, `publish` solo en push a
+  `main`). Nada que agregar.
+- [x] `platform-docs/security/known-deviations.md` actualizado: **KD-013** — DLT-011 decide
+  soporte nativo PAdES+XAdES+CAdES; v1 de este servicio solo implementa PAdES. Decisión de
+  alcance consciente (signing-plan.md punto 1), no una laguna silenciosa.

@@ -33,7 +33,7 @@ Ver `CLAUDE.md`/`AGENTS.md` ("Estructura real del repositorio") para la versión
 ├── tests/
 ├── scripts/{redis,sonar,docker}/
 ├── config/config.yaml
-├── docs/signing-plan.md               # plan de diseño (puntos 5-7 pendientes; 1-4 cerrados)
+├── docs/signing-plan.md               # plan de diseño — los 7 puntos cerrados, es bitácora
 ├── requirements/{base,dev}.txt
 ├── Dockerfile, Dockerfile.dev
 ├── docker-compose.yml, docker-compose.dev.yml

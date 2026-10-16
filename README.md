@@ -2,7 +2,7 @@
 
 API REST en Python (FastAPI) para firma digital de documentos, multi-tenant, arquitectura hexagonal (ports & adapters). **No opera el HSM ni emite certificados directamente** — delega la operación criptográfica a [`hsm-service`](../hsm-service) vía HTTP y obtiene/valida el certificado del firmante vía [`certificate-service`](../certificate-service) (`GET /certificates/{id}`, `POST /internal/certificates/validate-chain`), reenviando el JWT del caller original (servicios stateless, sin token de servicio fijo).
 
-**Estado actual:** firma de documentos end-to-end con PAdES real — PAdES-T cuando un TSA (RFC 3161, ADR-002) responde, PAdES-B con fallback a pseudo-timestamp local si no — con PIN/sesión (ADR-005), certificate-service, hsm-service y persistencia, para uno (`POST /sign`) o varios firmantes (`POST /signing-requests` + `POST /signing-requests/{id}/sign`, una llamada por firmante). Ver `CLAUDE.md`/`AGENTS.md` y `docs/signing-plan.md` (puntos 1-4 cerrados, 5-7 pendientes). Todavía no hay verificación de firmas.
+**Estado actual:** firma de documentos end-to-end con PAdES real — PAdES-T cuando un TSA (RFC 3161, ADR-002) responde, PAdES-B con fallback a pseudo-timestamp local si no — con PIN/sesión (ADR-005), certificate-service, hsm-service y persistencia, para uno (`POST /sign`) o varios firmantes (`POST /signing-requests` + `POST /signing-requests/{id}/sign`, una llamada por firmante). Ver `CLAUDE.md`/`AGENTS.md` y `docs/signing-plan.md` (sus 7 puntos ya están cerrados — es la bitácora de diseño, no trabajo pendiente). Todavía no hay verificación de firmas, ni XAdES/CAdES (DLT-011 los decide; v1 solo PAdES — ver KD-013).
 
 ## Características
 
@@ -24,6 +24,13 @@ API REST en Python (FastAPI) para firma digital de documentos, multi-tenant, arq
 | `GET` | `/health` | Health check (DB + Redis), sin autenticación |
 
 (La verificación de firmas se agregará acá cuando se implemente.)
+
+## Decisiones de arquitectura (ADRs)
+
+- **ADR-002** (`platform-docs/architecture/ADR/ADR-002-...md`): sellado de tiempo RFC 3161 vía un TSA externo, con fallback primario/secundario y degradación a pseudo-timestamp local si ambos fallan. Ver `FallbackChainTimeStamper`.
+- **ADR-003** (`.../ADR-003-...md`): Saga orquestada con compensación explícita para escrituras multi-servicio — **excluye explícitamente la firma de documentos** de ese requisito ("Document signing... is not in scope here"). La idempotencia vía `Idempotency-Key` que este servicio sí implementa es un patrón adoptado por su propio mérito (igual que `certificate-service`), no un mandato de este ADR para este flujo.
+- **ADR-005** (`.../ADR-004-application-level-signing-PIN-...md` — el archivo se llama `ADR-004` pero su título interno es `ADR-005`; no existe un ADR-004 separado en este repo, es una irregularidad de numeración documentada, no un documento faltante): PIN de firma a nivel aplicación + ventana de gracia. El PIN y su rate-limiting/lockout (backoff exponencial) viven en `certificate-service`; este servicio solo los consume.
+- **DLT-011** (`architecture/sprint-0.1/decision-log/DLT-011-...md`): decide soporte para PAdES + XAdES + CAdES. **v1 de este servicio solo implementa PAdES** (PAdES-B/PAdES-T) — desviación consciente de alcance, documentada en `docs/signing-plan.md` (punto 1) y en `platform-docs/security/known-deviations.md` (KD-013).
 
 ## Estructura
 [STRUCTURE.md](./STRUCTURE.md) para el árbol completo.
