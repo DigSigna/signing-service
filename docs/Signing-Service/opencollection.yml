@@ -19,8 +19,6 @@ request:
   variables:
     - name: baseUrl
       value: http://localhost:8001
-    - name: apiKey
-      value: eyJhbGciOiJSUzI1NiIsImtpZCI6ImRldi1rZXkiLCJ0eXAiOiJKV1QifQ.eyJraWQiOiJkZXYta2V5IiwidGVuYW50X2lkIjoiMjAwMDAwMDAtMjAwMC0yMDAwLTIwMDAtMDAwMDAwMDAwMDAxIiwib3duZXJfdHlwZSI6IlVTRVIiLCJvd25lcl9pZCI6IjIwMDAwMDAwLTIwMDAtMjAwMC0yMDAwLTAwMDAwMDAwMDEwMiIsIm9yZ2FuaXphdGlvbl9pZCI6IjIwMDAwMDAwLTIwMDAtMjAwMC0yMDAwLTAwMDAwMDAwMDAxMiIsInBhcmVudF9rZXlfaWQiOiI4NjM1OGM5NS0zMzYzLTQ2MTQtODU5MS02MDgyMWM5ZDAxYTUiLCJ1c2VyX2lkIjoiMjAwMDAwMDAtMjAwMC0yMDAwLTIwMDAtMDAwMDAwMDAwMTAyIiwiY2VydF9sZXZlbCI6MiwibWF4X2NlcnRfbGV2ZWwiOjAsImNhbl9jZXJ0aWZ5IjpmYWxzZSwiY2VydGlmaWNhdGlvbl9wYXRoIjoiY2Y3MjExM2QtOTZjNi00NzhmLWFkYTItMzdiYzYzMTAyYTEwODYzNThjOTUtMzM2My00NjE0LTg1OTEtNjA4MjFjOWQwMWE1IiwicGVybWlzc2lvbnMiOnsiZG9jdW1lbnRzIjpbInNpZ24iXSwia2V5cyI6WyJzaWduIl19LCJhdWQiOiJoc20tc2VydmljZSIsImV4cCI6MTc5MjE4NDYxOCwianRpIjoiZGV2LWp0aS11c2VyIiwiaWF0IjoxNzkyMDk4MjE4LCJpc3MiOiJpZGVudGlmaWNhdGlvbi1zZXJ2aWNlIiwic3ViIjoiZW5kLXVzZXIifQ.JHTt1Bjn3K197pt7VFDtlRTyMR9WMUqh5kQClNthdEsqAylDQ4aRLpoZmohXqFbuosEzFWlR8JU1N2YszwoCwjU7Krich0yjYgaETtJUywIE3WYcgnFCo2YdkSZ4Yt6Nz7mll60VqMl8HyS0NxxZJaow6DO1xEB0OKTo-Ojb-dpap_XRu0OMtzb_RrpDkxI0ABpHFdn3NFWfjLiP4Fx1xgBpsAxiw_biMrLeIBFco6WH6bsKxMHbApRFGvH2dlZFpZIUPlCKJwkUtvTczdafDN5bgpHQnn2yA1GQbiseNXKQ9oUXaaOFtXBoBnecGDK1FueiIV8hJqZUKLVXjQp6FA
 
 docs:
   content: API REST para firma digital de documentos, multi-tenant. No opera el HSM directamente — delega toda operación criptográfica a hsm-service vía HTTP (RemoteHSMClient), reenviando el JWT del caller original (servicios stateless, sin token de servicio fijo). Consume certificate-service para obtener/validar el certificado del firmante. El OpenAPI de esta página (`/openapi.json`) es importable directamente en Bruno (Import Collection → OpenAPI v3) para generar la colección de requests manuales.
@@ -34,7 +32,7 @@ extensions:
     openapi:
       - sourceUrl: http://localhost:8001/openapi.json
         groupBy: tags
-        lastSyncDate: 2026-10-15T20:55:59.846Z
-        specHash: 42289a499a447dc485028bd3a07855b5
+        lastSyncDate: 2026-10-16T19:59:12.078Z
+        specHash: a22afd796e05f4b99645f46901b78550
         autoCheck: true
         autoCheckInterval: 5

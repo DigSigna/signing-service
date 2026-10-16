@@ -1,0 +1,105 @@
+info:
+  name: Consultar el estado de un signing_request
+  type: http
+  seq: 4
+  tags:
+    - signing
+
+http:
+  method: GET
+  url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id"
+  params:
+    - name: signing_request_id
+      value: 0d526f40-753f-4989-ab81-02db0bf31fbc
+      type: path
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false
+
+examples:
+  - name: 200 Response
+    description: Successful Response
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id"
+      method: GET
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "signing_request_id": "",
+            "status": "",
+            "signers_number": 0,
+            "signatures_count": 0,
+            "created_at": "",
+            "completed_at": "",
+            "document_b64": ""
+          }
+  - name: 404 Response
+    description: NotFoundError — certificate_id no existe o el caller no tiene autoridad para verlo
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id"
+      method: GET
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+    response:
+      status: 404
+      statusText: Not Found
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "error": {
+              "code": "",
+              "message": "",
+              "details": {}
+            }
+          }
+  - name: 422 Response
+    description: Validation Error
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id"
+      method: GET
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+    response:
+      status: 422
+      statusText: Unprocessable Entity
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "detail": [
+              {
+                "loc": [],
+                "msg": "",
+                "type": ""
+              }
+            ]
+          }
+
+docs: Solo lectura, sin efectos secundarios (signing-plan.md punto 4.2). document_b64 solo viene presente si status == COMPLETED.

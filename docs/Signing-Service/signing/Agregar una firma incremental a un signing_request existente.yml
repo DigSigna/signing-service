@@ -1,0 +1,296 @@
+info:
+  name: Agregar una firma incremental a un signing_request existente
+  type: http
+  seq: 3
+  tags:
+    - signing
+
+http:
+  method: POST
+  url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/sign"
+  params:
+    - name: signing_request_id
+      value: 0d526f40-753f-4989-ab81-02db0bf31fbc
+      type: path
+  body:
+    type: json
+    data: |-
+      {
+        "certificate_id": "ec49925d-3579-4ab3-b3f9-0b24a57991a5",
+        "pin": "193042"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false
+
+examples:
+  - name: 201 Response
+    description: Successful Response
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/sign"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+      body:
+        type: json
+        data: |-
+          {
+            "certificate_id": "eb6dc1bc-74e9-43cd-9b0c-e47e36d6f7bd",
+            "pin": "193042"
+          }
+    response:
+      status: 201
+      statusText: Created
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "signing_request_id": "",
+            "signature_id": "",
+            "certificate_id": "",
+            "status": "",
+            "signers_number": 0,
+            "signatures_count": 0,
+            "signature_format": "",
+            "signing_time": "",
+            "tsa_provider": "",
+            "tsa_sealed_at": "",
+            "session_token": "",
+            "session_expires_at": ""
+          }
+  - name: 400 Response
+    description: ValidationError — document_b64 inválido, o falta pin sin un session_token vigente
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/sign"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+      body:
+        type: json
+        data: |-
+          {
+            "certificate_id": "eb6dc1bc-74e9-43cd-9b0c-e47e36d6f7bd",
+            "pin": "193042"
+          }
+    response:
+      status: 400
+      statusText: Bad Request
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "error": {
+              "code": "",
+              "message": "",
+              "details": {}
+            }
+          }
+  - name: 403 Response
+    description: AuthorizationError — el caller debe reenviar el JWT del propio titular del certificado
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/sign"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+      body:
+        type: json
+        data: |-
+          {
+            "certificate_id": "eb6dc1bc-74e9-43cd-9b0c-e47e36d6f7bd",
+            "pin": "193042"
+          }
+    response:
+      status: 403
+      statusText: Forbidden
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "error": {
+              "code": "",
+              "message": "",
+              "details": {}
+            }
+          }
+  - name: 404 Response
+    description: NotFoundError — certificate_id no existe o el caller no tiene autoridad para verlo
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/sign"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+      body:
+        type: json
+        data: |-
+          {
+            "certificate_id": "eb6dc1bc-74e9-43cd-9b0c-e47e36d6f7bd",
+            "pin": "193042"
+          }
+    response:
+      status: 404
+      statusText: Not Found
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "error": {
+              "code": "",
+              "message": "",
+              "details": {}
+            }
+          }
+  - name: 409 Response
+    description: SigningPinNotSetError, SigningRequestNotPendingError (el request ya está COMPLETED/CANCELLED/EXPIRED), SigningRequestConflictError (otra firma concurrente ganó la carrera — reintentar), o DuplicateRequestError
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/sign"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+      body:
+        type: json
+        data: |-
+          {
+            "certificate_id": "eb6dc1bc-74e9-43cd-9b0c-e47e36d6f7bd",
+            "pin": "193042"
+          }
+    response:
+      status: 409
+      statusText: Conflict
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "error": {
+              "code": "",
+              "message": "",
+              "details": {}
+            }
+          }
+  - name: 422 Response
+    description: CertificateChainInvalidError — la cadena del certificado no valida (expirado/revocado/firma rota en algún eslabón)
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/sign"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+      body:
+        type: json
+        data: |-
+          {
+            "certificate_id": "eb6dc1bc-74e9-43cd-9b0c-e47e36d6f7bd",
+            "pin": "193042"
+          }
+    response:
+      status: 422
+      statusText: Unprocessable Entity
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "error": {
+              "code": "",
+              "message": "",
+              "details": {}
+            }
+          }
+  - name: 423 Response
+    description: SigningPinLockedError — demasiados intentos fallidos
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/sign"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+      body:
+        type: json
+        data: |-
+          {
+            "certificate_id": "eb6dc1bc-74e9-43cd-9b0c-e47e36d6f7bd",
+            "pin": "193042"
+          }
+    response:
+      status: 423
+      statusText: Locked
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "error": {
+              "code": "",
+              "message": "",
+              "details": {}
+            }
+          }
+  - name: 502 Response
+    description: CertificateServiceUnavailableError, SigningPinVerificationUnavailableError, o HsmError
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/sign"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+      body:
+        type: json
+        data: |-
+          {
+            "certificate_id": "eb6dc1bc-74e9-43cd-9b0c-e47e36d6f7bd",
+            "pin": "193042"
+          }
+    response:
+      status: 502
+      statusText: Bad Gateway
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "error": {
+              "code": "",
+              "message": "",
+              "details": {}
+            }
+          }
+
+docs: "Un llamado por firmante (signing-plan.md punto 4.2): lee el documento en su estado actual, agrega la firma de este firmante sobre ese estado, e incrementa signatures_count. Si esta firma completa signers_number, sella con un TSA (ADR-002) en el mismo request y marca status=COMPLETED."
