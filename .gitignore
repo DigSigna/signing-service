@@ -3,6 +3,7 @@ keys/
 pytest_cache/
 .scannerwork/
 venv/
+.venv/
 __pycache__/
 bandit-results.json
 flake8-report.json
