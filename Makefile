@@ -1,10 +1,13 @@
 .PHONY: build build-dev up down logs ps restart compose-dev-up compose-dev-down infra-up infra-down cache-token cache-token-del
 
+# Ambos targets requieren DIGSIGNA_COMMON_TOKEN exportado en el shell (PAT
+# con acceso de lectura a github.com/DigSigna/py-common) — se pasa como
+# secret de BuildKit, nunca como build-arg, para que no quede en la imagen.
 build:
-	docker build -t signing-service .
+	docker build --secret id=digsigna_common_token,env=DIGSIGNA_COMMON_TOKEN -t signing-service .
 
 build-dev:
-	docker build -f Dockerfile.dev -t signing-service:dev .
+	docker build --secret id=digsigna_common_token,env=DIGSIGNA_COMMON_TOKEN -f Dockerfile.dev -t signing-service:dev .
 
 # docker-compose.dev.yml se une a la red "hsm-network" y usa el MySQL
 # compartido de hsm-service — levantá ese stack primero:

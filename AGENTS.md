@@ -18,6 +18,7 @@ Los patrones de seguridad de `hsm-service/CLAUDE.md` y `certificate-service/CLAU
 - `signatures` tenía `UNIQUE KEY uk_signature_request (signing_request_id)` desde la migración 003 — una restricción 1:1 real en la base, no solo una convención de código. El punto 4 del plan (N firmantes) la viola por diseño: un `signing_request` necesita poder tener más de una fila en `signatures`, una por firmante. **Ya corregido**: migración 026 (`DROP INDEX uk_signature_request` + `ADD INDEX idx_signatures_signing_request`, verificada up→down→up contra la base de dev real). Si en el futuro agregás otra tabla con una FK hacia `signing_requests`/`signatures` asumiendo 1:1, revisá primero si esa restricción sigue siendo cierta — ya no lo es.
 - `idempotency_keys.uk_idempotency_tenant_request` es único sobre `(tenant_id, request_id)` **solamente** (migración 019) — la columna `operation` es metadata, no parte de la clave. Un mismo `request_id` de cliente solo puede reclamar **una** idempotency key, nunca dos bajo operaciones distintas. Esto importa porque `POST /api/v1/sign` (azúcar sintáctica sobre `POST /signing-requests` + `POST /signing-requests/{id}/sign`, punto 4.3) no puede componerse llamando a `claim_idempotency_key` dos veces (una por cada paso interno) bajo el mismo `request_id` — la segunda llamada chocaría con el claim de la primera y leería mal su `resource_id`. **Ya corregido**: `app/application/services/signing_core.py` expone helpers que NO tocan idempotencia; cada caso de uso público (`CreateSigningRequestUseCaseImpl`, `SignIncrementUseCaseImpl`, y el propio `SignDocumentUseCaseImpl`) envuelve exactamente un claim/finish alrededor de los helpers que necesite. Si agregás un caso de uso nuevo que combine pasos de otros dos, no le pongas su propio claim interno a cada paso — un único claim en el nivel más externo.
 - La migración 016 (`tsa_token`/`tsa_provider`/`tsa_sealed_at` en `signatures`) **no estaba aplicada en la base de dev compartida** pese a que `schema_migrations` reportaba versión 23 (limpia, sin "dirty"). `015`/`016` son los únicos dos archivos del repo `migrations` nombrados con un espacio después del número de versión (`016 add tsa evidence to signatures.up.sql`) en vez del guión bajo que usa el resto (`NNN_snake_case`) — causa probable, no confirmada, de por qué el histórico de esta base en particular la saltó. **No asumas que una migración documentada en el repo `migrations` ya está aplicada en la base que estás usando** — confirmá contra `DESCRIBE`/`information_schema.COLUMNS`, no contra `schema_migrations.version` ni contra la existencia del archivo. Ver `platform-docs/security/known-deviations.md` (KD-012) — no se renombró el archivo ni se tocó `schema_migrations` (riesgo real si otro entorno ya trackeó ese nombre), solo se aplicó la migración a mano en esta base de dev para destrabar la verificación.
+- **2026-10-17 — extracción a `py-common`:** toda la "infraestructura genérica" que esta sección describía como "mantenida de la copia" (JWT/JWKS auth, idempotencia, auditoría híbrida, `UnifiedLogger`, request context, los middlewares `Logging`/`ErrorHandling`/`RequestContext`) se movió a un repo nuevo, [`py-common`](https://github.com/DigSigna/py-common), compartido con `certificate-service` — en el momento de la extracción, cada uno de esos archivos era idéntico byte a byte entre ambos repos (la razón de ser de este repo — "no reconstruir desde cero la infraestructura que ambos servicios comparten", arriba — ahora vive en un lugar donde en verdad se comparte, no se duplica). Importalos desde `py_common.*` (ver `README.md`/`CLAUDE.md` de `py-common` para el mapeo completo). La sección "Qué se mantuvo de la copia" de abajo quedó desactualizada por esto — tratala como histórica (qué existía al bootstrapear este repo), no como la ubicación actual del código.
 
 **Qué se mantuvo de la copia (infraestructura genérica, ya wireada y funcionando):**
 - `app/core/` completo: config (Pydantic Settings + YAML + expansión de env vars), logger JSON estructurado, request context (contextvars).
@@ -73,38 +74,63 @@ Stack: Python 3.11, FastAPI, Pydantic v2 (`pydantic-settings`), SQLAlchemy 2.0 a
 
 ```text
 app/
-  core/                                 # config, logger JSON, request context — igual a certificate-service/hsm-service
+  core/                                 # config — logger/request context ahora en py_common.core (ver hallazgo de extracción arriba)
   domain/
-    entities/                           # AuditEvent, IdempotencyRecord, Signature, SigningRequest, SigningSession, Tenant — sin Certificate
+    entities/                           # Signature, SigningRequest, SigningSession, Tenant — sin Certificate
+                                         # (AuditEvent/IdempotencyRecord ahora en py_common)
     events/                             # carpeta vacía hoy (ni __init__.py)
-    exceptions/domain_errors.py         # jerarquía de excepciones genérica + Signing PIN + CertificateClient + SigningRequest (sin subclases de CA/certificado)
-    ports/{input,output}/               # SignDocumentUseCase, CreateSigningRequestUseCase, SignIncrementUseCase, GetSigningRequestUseCase; AuditRecorder; AuditEventDispatcher/AuditStorage/AuditTransporter, CertificateClient, HSMClient, IdempotencyRepository, JWTKeyProvider/JWTValidator, PAdESSigner (+ PAdESSignResult), SigningRequestRepository, SigningPinVerifier, SigningSessionRepository, TenantRepository
-    valueobjects/                       # ActorType, Algorithm, AuditData, AuditStrategy, IdentityContext, KeyPurpose, Owner(Type), PlanType, SigningRequestStatus, TenantMode, TenantStatus
+    exceptions/domain_errors.py         # DomainError base ahora en py_common.errors (importado y re-exportado acá);
+                                         # este archivo solo define Signing PIN + CertificateClient + SigningRequest
+    ports/{input,output}/               # SignDocumentUseCase, CreateSigningRequestUseCase, SignIncrementUseCase,
+                                         # GetSigningRequestUseCase, CertificateClient, HSMClient, PAdESSigner
+                                         # (+ PAdESSignResult), SigningRequestRepository, SigningPinVerifier,
+                                         # SigningSessionRepository, TenantRepository (AuditRecorder/
+                                         # AuditEventDispatcher/AuditStorage/AuditTransporter/IdempotencyRepository/
+                                         # JWTKeyProvider/JWTValidator ahora en py_common.audit/py_common.idempotency/
+                                         # py_common.auth)
+    valueobjects/                       # Algorithm, KeyPurpose, Owner, PlanType, SigningRequestStatus, TenantMode,
+                                         # TenantStatus (ActorType/AuditData/AuditStrategy/IdentityContext/OwnerType
+                                         # ahora en py_common.auth/py_common.audit — Owner.py y este __init__.py
+                                         # re-exportan OwnerType desde ahí para no romper el import existente)
   application/
     dto/, mappers/                      # VACÍOS hoy
     use_cases/                          # sign_document.py (azúcar sobre el flujo de abajo — punto 4.3), create_signing_request.py, sign_increment.py, get_signing_request.py
-    services/                           # idempotency.py, audit_helpers.py, signing_pin_session.py (ADR-005), signing_core.py (lógica de firma compartida, sin idempotencia — ver hallazgo)
+    services/                           # audit_helpers.py, signing_pin_session.py (ADR-005), signing_core.py (lógica
+                                         # de firma compartida, sin idempotencia — ver hallazgo). idempotency.py se
+                                         # movió a py_common.idempotency
   infrastructure/
-    audit/                              # audit_worker.py + factory.py + hybrid_processor.py — ya wireado si AUDIT_ENABLED
     crypto/                              # recreada tras el recorte inicial (eliminó x509_builder/verifier, no relacionados)
       pyhanko_pades_signer.py            # PyHankoPAdESSigner — firma PAdES real (signing-plan.md punto 1)
       fallback_timestamper.py            # FallbackChainTimeStamper — RFC 3161 con fallback primario/secundario (ADR-002, punto 3)
-    database/                           # sesión SQLAlchemy async; models/{base,tenant,audit_event,idempotency_key,signing_pin_session,signing_request,signature}.py (signing_request.py = agregado 026); repositories/{tenant_repository,audit_repository,idempotency_repository,signing_pin_session_repository,signing_request_repository}.py; adapters/audited_tenant_repository.py
+    database/                           # sesión SQLAlchemy async; models/{base,tenant,signing_pin_session,
+                                         # signing_request,signature}.py (signing_request.py = agregado 026);
+                                         # repositories/{tenant_repository,signing_pin_session_repository,
+                                         # signing_request_repository}.py; adapters/audited_tenant_repository.py
+                                         # (audit_event/idempotency_key models y repos ahora en py_common.audit/
+                                         # py_common.idempotency, mismas tablas compartidas audit_logs/idempotency_keys)
     external/hsm/                       # factory + RemoteHSMClient + InMemoryHSMClient
     external/certificate/               # http_pin_verifier.py (RemoteSigningPinVerifier) + http_certificate_client.py (RemoteCertificateClient) + intermediate_cache.py (IntermediateCertificateCache) — todos a certificate-service
-    external/redis/                     # cache de tokens JWT
-    external/audit/http_audit_transporter.py
     external/do_storage/                # carpeta vacía hoy (ni __init__.py)
+                                         # (external/redis/, external/audit/ ahora en py_common.auth/py_common.audit)
   interfaces/
-    auth/permissions.py                 # require_admin / get_identity_context
-    middleware/                         # auth, logging, error_handling, request_context — las 4 ya registradas en main.py
     routes/{health,signing}.py          # GET /health; POST /sign, POST /signing-requests, POST /signing-requests/{id}/sign, GET /signing-requests/{id} — los únicos endpoints HTTP wireados hoy
     schemas/                            # errors.py, health.py, signing.py — sin schemas de certificado/CA
+                                         # (auth/permissions.py, middleware/ ahora en py_common.auth y py_common.middleware)
 config/config.yaml                      # config base (fusiona con .env y env vars vía pydantic-settings)
 scripts/redis/, scripts/sonar/, scripts/docker/
 docs/signing-plan.md                    # plan de diseño agregado por el usuario — los 7 puntos están cerrados, es bitácora, no pendientes
 bruno/                                  # colección de requests manuales (si existe)
-tests/                                  # test_health, test_hsm_client, test_remote_hsm_client, test_idempotency_service, test_permissions, test_domain_errors, test_remote_signing_pin_verifier, test_signing_pin_session_service, test_remote_certificate_client, test_intermediate_certificate_cache, test_pyhanko_pades_signer, test_sign_document_use_case, test_create_signing_request_use_case, test_sign_increment_use_case, test_get_signing_request_use_case — mockeado salvo test_pyhanko_pades_signer.py, que firma y valida un PDF real con pyHanko (sin mockear pyHanko) para probar la integración de verdad, no solo "no explotó". `SQLAlchemySigningRequestRepository` (bloqueo optimista vía `version`) se verificó aparte contra la base de dev real, no solo con fakes — ver el hallazgo de la UNIQUE KEY arriba
+tests/                                  # test_health, test_hsm_client, test_remote_hsm_client, test_domain_errors,
+                                         # test_remote_signing_pin_verifier, test_signing_pin_session_service,
+                                         # test_remote_certificate_client, test_intermediate_certificate_cache,
+                                         # test_pyhanko_pades_signer, test_sign_document_use_case,
+                                         # test_create_signing_request_use_case, test_sign_increment_use_case,
+                                         # test_get_signing_request_use_case — mockeado salvo test_pyhanko_pades_signer.py,
+                                         # que firma y valida un PDF real con pyHanko (sin mockear pyHanko) para probar
+                                         # la integración de verdad, no solo "no explotó". `SQLAlchemySigningRequestRepository`
+                                         # (bloqueo optimista vía `version`) se verificó aparte contra la base de dev
+                                         # real, no solo con fakes — ver el hallazgo de la UNIQUE KEY arriba.
+                                         # (test_idempotency_service/test_permissions se movieron a py-common)
 ```
 
 ## Comandos esenciales
@@ -114,6 +140,7 @@ Mismas dos topologías que `certificate-service` (comparten el mismo MySQL vía 
 **Opción A — standalone (`docker-compose.yml`), HSM stub en memoria:**
 ```bash
 make infra-up         # MySQL propio + migraciones compartidas (ghcr.io/digsigna/migrations)
+export DIGSIGNA_COMMON_TOKEN=<PAT con acceso de lectura a DigSigna/py-common>  # pip lo necesita para el git+https de abajo
 pip install -r requirements/base.txt -r requirements/dev.txt
 # .env con HSM_BACKEND=in_memory, DB_URL=mysql://digsigna:digsigna@localhost:3306/digsigna
 uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
@@ -149,17 +176,17 @@ black --check app/ tests/
 
 ## Reglas de seguridad — NO NEGOCIABLES
 
-Mismo espíritu que `hsm-service`/`certificate-service`, adaptado a este servicio. Repetilas mentalmente antes de tocar `app/domain/`, `app/infrastructure/external/hsm/`, `app/interfaces/auth/`, o `config/`:
+Mismo espíritu que `hsm-service`/`certificate-service`, adaptado a este servicio. Repetilas mentalmente antes de tocar `app/domain/`, `app/infrastructure/external/hsm/`, `py-common`'s `auth/`, o `config/`:
 
 1. **Nunca hardcodees credenciales, PINs o seeds** en `config/config.yaml`, `.env.example` ni código fuente — ni siquiera como "default de desarrollo". `Settings.ensure_database_config` (`app/core/config.py`) ya está escrito para fallar el arranque si `DB_URL` no está seteada — no le agregues un fallback funcional.
-2. **Nunca loguees material criptográfico**: PINs, claves privadas, hashes de firma completos, JWTs completos. Usá `metadata` del logger solo para longitudes o hashes truncados.
+2. **Nunca loguees material criptográfico**: PINs, claves privadas, hashes de firma completos, JWTs completos. Usá `metadata` del logger (`py_common.core.logger`) solo para longitudes o hashes truncados.
 3. **Cualquier generación aleatoria con fines criptográficos usa el módulo `secrets`**, nunca `random`.
-4. **Nunca uses `print()` para logging** — usá `get_logger(...)`.
+4. **Nunca uses `print()` para logging** — usá `get_logger(...)` (`py_common.core.logger`).
 5. **No silencies excepciones de red/criptográficas con `except Exception: pass`** — como mínimo logueá el error.
 6. **Este servicio no toca el HSM directamente** — todo pasa por `HSMClient` → `RemoteHSMClient`. No agregues un cliente PKCS#11 directo.
 7. **El Dockerfile de producción corre como usuario no-root** (`USER app`) — no lo reviertas.
-8. **No agregues dependencias nuevas** sin evaluar mantenimiento/licencia/seguridad — `safety check` después de cualquier cambio a `requirements/`.
-9. Cambios en `app/domain/`, `app/infrastructure/external/hsm/`, `app/interfaces/auth/` requieren explicar el razonamiento de seguridad en el PR, no solo "funciona".
+8. **No agregues dependencias nuevas** sin evaluar mantenimiento/licencia/seguridad — `safety check` después de cualquier cambio a `requirements/`. Lo mismo aplica a bumpear el pin de `py-common`: es una dependencia como cualquier otra.
+9. Cambios en `app/domain/`, `app/infrastructure/external/hsm/`, o en el JWT auth de `py-common` requieren explicar el razonamiento de seguridad en el PR, no solo "funciona". Un cambio en `py-common` que afecta la autenticación de *ambos* servicios necesita probarse contra los dos.
 
 ## Convenciones de código
 
@@ -168,7 +195,7 @@ Mismo espíritu que `hsm-service`/`certificate-service`, adaptado a este servici
 - Puertos como `ABC` en `domain/ports/{input,output}/` — adaptadores concretos en `infrastructure/`. No importes `infrastructure/` desde `domain/`.
 - DTOs/schemas HTTP son modelos Pydantic en `interfaces/schemas/`, separados de las entidades de dominio.
 - Async en toda la cadena. Una llamada bloqueante dentro de un handler async es un bug a evitar.
-- Antes de escribir un helper nuevo, revisá `app/core/` y `app/application/services/` — correlation ID, logger, config e idempotencia ya están centralizados.
+- Antes de escribir un helper nuevo, revisá `app/core/` (config) y `py_common` (logger, request context, JWT auth, idempotencia, auditoría) — no reimplementes algo que ya vive en alguno de los dos.
 
 ## Pruebas
 
@@ -179,6 +206,7 @@ Mismo espíritu que `hsm-service`/`certificate-service`, adaptado a este servici
 - Un repositorio SQLAlchemy nuevo que escriba más de una tabla con una dependencia entre ellas: probalo contra una base real al menos una vez (no solo con fakes) — ver el hallazgo de ordenamiento de `flush()` arriba, que ningún test unitario iba a atrapar.
 - Código que envuelve una librería de criptografía/PDF externa (p. ej. `PAdESSigner`): no te quedes en "no tiró excepción" — generá certificados de prueba reales con `cryptography` (ver `test_pyhanko_pades_signer.py`) y validá el resultado con el propio validador de la librería (`pyhanko.sign.validation`), contra un trust root que controlás. Si escribís un certificado de prueba a mano, acordate del `KeyUsage` (`content_commitment`/non-repudiation) — los certificados reales de `certificate-service` siempre lo tienen, y la política de validación de `pyhanko` lo exige; sin él, un test puede fallar por una razón que no tiene nada que ver con el código que estás probando.
 - Tests de `FallbackChainTimeStamper`/TSA: nunca contra FreeTSA.org/Certum reales — usá `pyhanko.sign.timestamps.DummyTimeStamper` (identidad TSA autofirmada, produce un token RFC 3161 real y parseable sin red) para el caso "un TSA respondió", y un `TimeStamper` fake que siempre lanza `TimestampRequestError` para el caso "todos fallan". Ambos se inyectan como delegados directos de `FallbackChainTimeStamper` — no hace falta mockear HTTP.
+- Un cambio que requiere tocar código dentro de `py_common` (no solo cómo este repo lo usa) se hace en el repo `py-common`, con sus propios tests ahí — no copies el módulo de vuelta a este repo para "ajustarlo rápido".
 
 ## Notas de entorno (Windows / Docker)
 

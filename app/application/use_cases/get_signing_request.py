@@ -16,7 +16,7 @@ from app.domain.ports.input.GetSigningRequestUseCase import (
 from app.domain.ports.output.SigningRequestRepository import (
     SigningRequestRepository,
 )
-from app.domain.valueobjects.IdentityContext import IdentityContext
+from py_common.auth.identity_context import IdentityContext
 from app.domain.valueobjects.SigningRequestStatus import SigningRequestStatus
 
 

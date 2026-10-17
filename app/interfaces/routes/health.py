@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from redis import Redis
 
 from app.core.config import get_settings
-from app.core.logger import get_logger
+from py_common.core.logger import get_logger
 from app.infrastructure.database.session import ping_db
 from app.interfaces.schemas.health import HealthResponse
 

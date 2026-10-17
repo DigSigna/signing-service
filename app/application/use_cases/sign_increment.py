@@ -18,7 +18,7 @@ from typing import Optional
 from uuid import UUID
 
 from app.application.services.audit_helpers import build_audit_data
-from app.application.services.idempotency import (
+from py_common.idempotency import (
     claim_idempotency_key,
     finish_idempotency_claim,
 )
@@ -29,7 +29,7 @@ from app.domain.ports.input.SignIncrementUseCase import (
     SignIncrementResult,
     SignIncrementUseCase,
 )
-from app.domain.ports.output.AuditEventDispatcher import AuditEventDispatcher
+from py_common.audit import AuditEventDispatcher
 from app.domain.ports.output.CertificateClient import CertificateClient
 from app.domain.ports.output.HSMClient import HSMClient
 from app.domain.ports.output.PAdESSigner import PAdESSigner
@@ -38,11 +38,11 @@ from app.domain.ports.output.SigningRequestRepository import (
     SigningRequestRepository,
 )
 from app.domain.ports.output.SigningSessionRepository import SigningSessionRepository
-from app.domain.valueobjects.IdentityContext import IdentityContext
+from py_common.auth.identity_context import IdentityContext
 from app.infrastructure.external.certificate.intermediate_cache import (
     IntermediateCertificateCache,
 )
-from app.core.request_context import get_context_values
+from py_common.core.request_context import get_context_values
 
 _SERVICE_NAME = "signing-service"
 _RESOURCE_TYPE = "signature"

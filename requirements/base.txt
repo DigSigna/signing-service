@@ -19,3 +19,10 @@ python-multipart==0.0.6
 # byte-range signing, never done by hand.
 pyhanko==0.37.0
 pyhanko-certvalidator==0.32.1
+
+# TODO: once DigSigna/py-common's migration/py-common branch is reviewed,
+# merged, and tagged, repoint this at the tag (e.g. @v0.1.0) instead of the
+# branch. DIGSIGNA_COMMON_TOKEN (fine-grained PAT with read access to
+# DigSigna/py-common) must be set as a CI secret here and in
+# certificate-service for `pip install` to reach this private repo.
+git+https://x-access-token:${DIGSIGNA_COMMON_TOKEN}@github.com/DigSigna/py-common.git@migration/py-common

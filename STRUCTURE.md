@@ -6,30 +6,34 @@ Ver `CLAUDE.md`/`AGENTS.md` ("Estructura real del repositorio") para la versión
 .
 ├── app/
 │   ├── main.py
-│   ├── core/                          # config, logger, request context
+│   ├── core/                          # config (logger/request context ahora en py_common.core, extraído a
+│   │                                   # DigSigna/py-common, 2026-10-17)
 │   ├── domain/
-│   │   ├── entities/                  # AuditEvent, IdempotencyRecord, Signature, SigningRequest, SigningSession, Tenant
+│   │   ├── entities/                  # Signature, SigningRequest, SigningSession, Tenant
+│   │   │                              # (AuditEvent/IdempotencyRecord ahora en py_common)
 │   │   ├── events/                    # vacía hoy
-│   │   ├── exceptions/domain_errors.py
-│   │   ├── ports/{input,output}/      # interfaces ABC (incl. SignDocumentUseCase, CreateSigningRequestUseCase, SignIncrementUseCase, GetSigningRequestUseCase, CertificateClient, PAdESSigner, SigningRequestRepository)
-│   │   └── valueobjects/
+│   │   ├── exceptions/domain_errors.py   # subclases propias — DomainError base en py_common.errors
+│   │   ├── ports/{input,output}/      # interfaces ABC propias (incl. SignDocumentUseCase, CreateSigningRequestUseCase,
+│   │   │                              # SignIncrementUseCase, GetSigningRequestUseCase, CertificateClient, PAdESSigner,
+│   │   │                              # SigningRequestRepository — Audit*/JWT*/IdempotencyRepository ahora en py_common)
+│   │   └── valueobjects/              # (IdentityContext/OwnerType/ActorType/AuditStrategy ahora en py_common)
 │   ├── application/
 │   │   ├── dto/                       # vacía hoy
 │   │   ├── mappers/                   # vacía hoy
-│   │   ├── services/                  # idempotency.py, audit_helpers.py, signing_pin_session.py, signing_core.py
+│   │   ├── services/                  # audit_helpers.py, signing_pin_session.py, signing_core.py
+│   │   │                              # (idempotency.py ahora en py_common.idempotency)
 │   │   └── use_cases/                 # sign_document.py, create_signing_request.py, sign_increment.py, get_signing_request.py
 │   ├── infrastructure/
-│   │   ├── audit/
-│   │   ├── auth/
 │   │   ├── crypto/{pyhanko_pades_signer,fallback_timestamper}.py   # PAdES real + sello RFC 3161 con fallback
-│   │   ├── database/{models,repositories,adapters}/   # signing_request_repository.py (reemplaza signature_record_repository.py)
-│   │   └── external/{hsm,certificate,redis,audit,do_storage}/   # certificate/ incl. intermediate_cache.py
+│   │   ├── database/{models,repositories,adapters}/   # signing_request_repository.py (reemplaza signature_record_repository.py);
+│   │   │                              # audit_event/idempotency_key ahora en py_common
+│   │   └── external/{hsm,certificate,do_storage}/   # certificate/ incl. intermediate_cache.py
+│   │                                   # (redis/, audit/ ahora en py_common.auth/py_common.audit)
 │   └── interfaces/
-│       ├── auth/permissions.py
 │       ├── dependencies.py
-│       ├── middleware/
 │       ├── routes/{health,signing}.py   # /sign, /signing-requests, /signing-requests/{id}/sign, /signing-requests/{id}
 │       └── schemas/
+│                                       # (auth/permissions.py, middleware/ ahora en py_common.auth / py_common.middleware)
 ├── tests/
 ├── scripts/{redis,sonar,docker}/
 ├── config/config.yaml

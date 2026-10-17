@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from app.domain.valueobjects.IdentityContext import IdentityContext
+from py_common.auth.identity_context import IdentityContext
 
 
 @dataclass

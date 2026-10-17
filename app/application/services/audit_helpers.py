@@ -15,8 +15,8 @@ import time
 from typing import Any, Dict, Optional
 
 from app.domain.exceptions.domain_errors import get_error_code
-from app.domain.valueobjects.AuditData import AuditData
-from app.domain.valueobjects.IdentityContext import IdentityContext
+from py_common.audit import AuditData
+from py_common.auth.identity_context import IdentityContext
 
 
 def build_audit_data(
