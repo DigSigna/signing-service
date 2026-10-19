@@ -15,6 +15,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
+      secrets:
+        - digsigna_common_token
     image: signing-service:dev
     container_name: signing-service-dev
     environment:
@@ -43,7 +45,7 @@ services:
       CERTIFICATE_SERVICE_BASE_URL: "http://certificate-service:8000"
       CERTIFICATE_SERVICE_TIMEOUT: 5s
 
-      # Auditoría: hybrid cae a solo-DB si no hay AUDIT_HTTP_BASE_URL (ver app/infrastructure/audit/factory.py)
+      # Auditoría: hybrid cae a solo-DB si no hay AUDIT_HTTP_BASE_URL (ver py_common.audit.factory, en py-common)
       AUDIT_ENABLED: "true"
       AUDIT_STRATEGY: hybrid
     ports:
@@ -59,3 +61,7 @@ networks:
   hsm-network:
     external: true
     name: hsm-network
+
+secrets:
+  digsigna_common_token:
+    environment: DIGSIGNA_COMMON_TOKEN

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM python:3.11-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -8,10 +9,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     python3-dev \
     curl \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
+# See Dockerfile for why this is a BuildKit secret mount, not a build-arg/ENV.
 COPY requirements/base.txt /app/requirements/base.txt
-RUN pip install --no-cache-dir -r /app/requirements/base.txt
+RUN --mount=type=secret,id=digsigna_common_token \
+    DIGSIGNA_COMMON_TOKEN="$(cat /run/secrets/digsigna_common_token)" \
+    pip install --no-cache-dir -r /app/requirements/base.txt
 
 COPY . /app
 

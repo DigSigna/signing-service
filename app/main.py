@@ -2,19 +2,19 @@ from datetime import timedelta
 
 from fastapi import FastAPI
 from app.core.config import get_settings
-from app.core.logger import get_logger
+from py_common.core.logger import get_logger
 from app.infrastructure.database.session import AsyncSessionLocal, close_db, init_db
 from app.interfaces.routes.health import router as health_router
 from app.interfaces.routes.signing import router as signing_router
-from app.interfaces.middleware.logging import LoggingMiddleware
-from app.interfaces.middleware.error_handling import ErrorHandlingMiddleware
-from app.interfaces.middleware.request_context import RequestContextMiddleware
-from app.interfaces.middleware.auth import AuthMiddleware
-from app.infrastructure.auth.key_manager_adapter import (
+from py_common.middleware.logging import LoggingMiddleware
+from py_common.middleware.error_handling import ErrorHandlingMiddleware
+from py_common.middleware.request_context import RequestContextMiddleware
+from py_common.auth.middleware import AuthMiddleware
+from py_common.auth.key_manager_adapter import (
     KeyManagerAdapter,
     KeyManagerConfig,
 )
-from app.infrastructure.auth.validator_adapter import JWTValidatorAdapter
+from py_common.auth.validator_adapter import JWTValidatorAdapter
 from app.infrastructure.external.hsm import create_hsm_client
 from app.infrastructure.external.certificate.http_pin_verifier import (
     RemoteSigningPinVerifier,
@@ -32,13 +32,9 @@ from app.infrastructure.crypto.fallback_timestamper import (
     FallbackChainTimeStamper,
     TsaCandidate,
 )
-from app.infrastructure.external.redis import TokenCache, TokenCacheConfig
-from app.infrastructure.audit.audit_worker import AuditWorker
-from app.infrastructure.audit.factory import new_audit_recorder
-from app.infrastructure.database.repositories.audit_repository import (
-    SQLAlchemyAuditRepository,
-)
-from app.domain.valueobjects.AuditStrategy import AuditStrategy
+from py_common.auth.token_cache import TokenCache, TokenCacheConfig
+from py_common.audit import AuditStrategy, AuditWorker, new_audit_recorder
+from py_common.audit.sqlalchemy_repository import SQLAlchemyAuditRepository
 
 settings = get_settings()
 logger = get_logger("signing-service")
@@ -92,8 +88,8 @@ def _parse_seconds(value: str, default: float) -> float:
 
 # Middlewares
 app.add_middleware(RequestContextMiddleware)
-app.add_middleware(LoggingMiddleware)
-app.add_middleware(ErrorHandlingMiddleware)
+app.add_middleware(LoggingMiddleware, service_name="signing-service")
+app.add_middleware(ErrorHandlingMiddleware, service_name="signing-service")
 app.add_middleware(AuthMiddleware)
 
 # Routers
@@ -186,6 +182,7 @@ async def startup_event():
             strategy=strategy,
             storage=audit_storage,
             http_base_url=settings.AUDIT_HTTP_BASE_URL,
+            service_name="signing-service",
         )
         audit_worker = AuditWorker(audit_recorder)
         app.state.audit_session = audit_session

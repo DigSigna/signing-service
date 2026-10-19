@@ -14,10 +14,10 @@ from uuid import UUID
 
 from app.domain.entities.Tenant import Tenant
 from app.domain.exceptions.domain_errors import get_error_code
-from app.domain.ports.output.AuditEventDispatcher import AuditEventDispatcher
+from py_common.audit import AuditEventDispatcher
 from app.domain.ports.output.TenantRepository import TenantRepository
-from app.domain.valueobjects.ActorType import ActorType
-from app.domain.valueobjects.AuditData import AuditData
+from py_common.audit import ActorType
+from py_common.audit import AuditData
 
 _SERVICE_NAME = "repository-adapter"
 

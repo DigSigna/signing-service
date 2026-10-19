@@ -22,7 +22,7 @@ from app.domain.ports.input.CreateSigningRequestUseCase import (
 )
 from app.domain.ports.input.SignDocumentUseCase import SignDocumentCommand
 from app.domain.ports.input.SignIncrementUseCase import SignIncrementCommand
-from app.infrastructure.database.repositories.idempotency_repository import (
+from py_common.idempotency.sqlalchemy_repository import (
     SQLAlchemyIdempotencyRepository,
 )
 from app.infrastructure.database.repositories.signing_pin_session_repository import (
@@ -32,7 +32,7 @@ from app.infrastructure.database.repositories.signing_request_repository import 
     SQLAlchemySigningRequestRepository,
 )
 from app.infrastructure.database.session import get_session
-from app.interfaces.auth.permissions import get_identity_context
+from py_common.auth.permissions import get_identity_context
 from app.interfaces.dependencies import (
     get_audit_dispatcher,
     get_bearer_token,

@@ -28,8 +28,8 @@ from app.domain.ports.output.SigningRequestRepository import (
     SigningRequestRepository,
 )
 from app.domain.ports.output.SigningSessionRepository import SigningSessionRepository
-from app.domain.valueobjects.IdentityContext import IdentityContext
-from app.domain.valueobjects.OwnerType import OwnerType
+from py_common.auth.identity_context import IdentityContext
+from py_common.auth.owner_type import OwnerType
 from app.domain.valueobjects.SigningRequestStatus import SigningRequestStatus
 from app.infrastructure.external.certificate.intermediate_cache import (
     IntermediateCertificateCache,

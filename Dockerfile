@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # template-python-fastapi/Dockerfile
 FROM python:3.11-slim-bookworm AS builder
 
@@ -7,11 +8,19 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     python3-dev \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiar requirements e instalar dependencias
+# Copiar requirements e instalar dependencias. requirements/base.txt incluye
+# un git+https a DigSigna/py-common (privado) con un token embebido vía
+# ${DIGSIGNA_COMMON_TOKEN} — se monta como secret de BuildKit, nunca como
+# build-arg/ENV, para que no quede grabado en ninguna capa ni en el historial
+# de la imagen. `docker build`/`docker compose build` deben pasarlo con
+# `--secret id=digsigna_common_token,env=DIGSIGNA_COMMON_TOKEN` (ver Makefile).
 COPY requirements/base.txt .
-RUN pip install --no-cache-dir -r base.txt
+RUN --mount=type=secret,id=digsigna_common_token \
+    DIGSIGNA_COMMON_TOKEN="$(cat /run/secrets/digsigna_common_token)" \
+    pip install --no-cache-dir -r base.txt
 
 FROM python:3.11-slim-bookworm AS production
 

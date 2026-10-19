@@ -50,6 +50,7 @@ Hay dos formas de correr este servicio en local, según si necesitás el HSM rea
 
 **Opción A — standalone, sin `hsm-service` (HSM stub en memoria):**
 ```bash
+export DIGSIGNA_COMMON_TOKEN=<PAT con acceso de lectura a github.com/DigSigna/py-common>
 pip install -r requirements/base.txt -r requirements/dev.txt
 
 make infra-up   # docker-compose.yml: MySQL propio + migraciones compartidas

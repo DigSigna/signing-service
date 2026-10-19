@@ -30,7 +30,7 @@ from pyhanko.sign.timestamps import (
     TimeStamper,
 )
 
-from app.core.logger import get_logger
+from py_common.core.logger import get_logger
 
 logger = get_logger("signing-service")
 

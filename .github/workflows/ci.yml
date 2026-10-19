@@ -26,7 +26,13 @@ jobs:
             requirements/base.txt
             requirements/dev.txt
 
+      # DIGSIGNA_COMMON_TOKEN: fine-grained PAT with read access to the
+      # private github.com/DigSigna/py-common repo — requirements/base.txt
+      # pulls it as a git+https dependency and expands ${DIGSIGNA_COMMON_TOKEN}
+      # itself (pip supports env var expansion in requirements files).
       - name: Install dependencies
+        env:
+          DIGSIGNA_COMMON_TOKEN: ${{ secrets.DIGSIGNA_COMMON_TOKEN }}
         run: pip install -r requirements/base.txt -r requirements/dev.txt
 
       - name: Format check (black)
@@ -91,8 +97,10 @@ jobs:
         password: ${{ secrets.GHCR_TOKEN }}
 
     - name: Build Docker Image
+      env:
+        DIGSIGNA_COMMON_TOKEN: ${{ secrets.DIGSIGNA_COMMON_TOKEN }}
       run: |
-        docker build -t ghcr.io/${{ steps.vars.outputs.repo_lower }}:${{ steps.vars.outputs.version }} -f Dockerfile .
+        docker build --secret id=digsigna_common_token,env=DIGSIGNA_COMMON_TOKEN -t ghcr.io/${{ steps.vars.outputs.repo_lower }}:${{ steps.vars.outputs.version }} -f Dockerfile .
         docker tag ghcr.io/${{ steps.vars.outputs.repo_lower }}:${{ steps.vars.outputs.version }} ghcr.io/${{ steps.vars.outputs.repo_lower }}:latest
 
     - name: Push to GHCR

@@ -13,23 +13,23 @@ from typing import Optional
 from uuid import UUID
 
 from app.application.services.audit_helpers import build_audit_data
-from app.application.services.idempotency import (
+from py_common.idempotency import (
     claim_idempotency_key,
     finish_idempotency_claim,
 )
 from app.application.services.signing_core import create_signing_request_row
-from app.core.request_context import get_context_values
+from py_common.core.request_context import get_context_values
 from app.domain.entities.SigningRequest import SigningRequest
 from app.domain.ports.input.CreateSigningRequestUseCase import (
     CreateSigningRequestCommand,
     CreateSigningRequestResult,
     CreateSigningRequestUseCase,
 )
-from app.domain.ports.output.AuditEventDispatcher import AuditEventDispatcher
+from py_common.audit import AuditEventDispatcher
 from app.domain.ports.output.SigningRequestRepository import (
     SigningRequestRepository,
 )
-from app.domain.valueobjects.IdentityContext import IdentityContext
+from py_common.auth.identity_context import IdentityContext
 
 _SERVICE_NAME = "signing-service"
 _RESOURCE_TYPE = "signing_request"

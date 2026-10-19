@@ -16,8 +16,8 @@ from app.domain.ports.input.CreateSigningRequestUseCase import (
 from app.domain.ports.output.SigningRequestRepository import (
     SigningRequestRepository,
 )
-from app.domain.valueobjects.IdentityContext import IdentityContext
-from app.domain.valueobjects.OwnerType import OwnerType
+from py_common.auth.identity_context import IdentityContext
+from py_common.auth.owner_type import OwnerType
 from app.domain.valueobjects.SigningRequestStatus import SigningRequestStatus
 
 TENANT_ID = UUID(int=1)

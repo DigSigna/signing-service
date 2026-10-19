@@ -14,7 +14,7 @@ from typing import Optional
 from fastapi import HTTPException, Request
 from starlette.status import HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERROR
 
-from app.domain.ports.output.AuditEventDispatcher import AuditEventDispatcher
+from py_common.audit import AuditEventDispatcher
 from app.domain.ports.output.CertificateClient import CertificateClient
 from app.domain.ports.output.HSMClient import HSMClient
 from app.domain.ports.output.PAdESSigner import PAdESSigner
