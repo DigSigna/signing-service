@@ -15,13 +15,11 @@ from fastapi import HTTPException, Request
 from starlette.status import HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERROR
 
 from py_common.audit import AuditEventDispatcher
+from app.domain.ports.output.CertificateChainCache import CertificateChainCache
 from app.domain.ports.output.CertificateClient import CertificateClient
 from app.domain.ports.output.HSMClient import HSMClient
 from app.domain.ports.output.PAdESSigner import PAdESSigner
 from app.domain.ports.output.SigningPinVerifier import SigningPinVerifier
-from app.infrastructure.external.certificate.intermediate_cache import (
-    IntermediateCertificateCache,
-)
 
 
 def get_bearer_token(request: Request) -> str:
@@ -71,7 +69,7 @@ def get_pin_verifier(request: Request) -> SigningPinVerifier:
     return verifier
 
 
-def get_intermediate_cache(request: Request) -> IntermediateCertificateCache:
+def get_intermediate_cache(request: Request) -> CertificateChainCache:
     cache = getattr(request.app.state, "intermediate_cache", None)
     if cache is None:
         raise HTTPException(

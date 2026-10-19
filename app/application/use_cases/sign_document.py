@@ -38,6 +38,7 @@ from app.domain.ports.input.SignDocumentUseCase import (
     SignDocumentUseCase,
 )
 from py_common.audit import AuditEventDispatcher
+from app.domain.ports.output.CertificateChainCache import CertificateChainCache
 from app.domain.ports.output.CertificateClient import CertificateClient
 from app.domain.ports.output.HSMClient import HSMClient
 from app.domain.ports.output.PAdESSigner import PAdESSigner
@@ -47,9 +48,6 @@ from app.domain.ports.output.SigningRequestRepository import (
 )
 from app.domain.ports.output.SigningSessionRepository import SigningSessionRepository
 from py_common.auth.identity_context import IdentityContext
-from app.infrastructure.external.certificate.intermediate_cache import (
-    IntermediateCertificateCache,
-)
 
 _SERVICE_NAME = "signing-service"
 _RESOURCE_TYPE = "signature"
@@ -65,7 +63,7 @@ class SignDocumentUseCaseImpl(SignDocumentUseCase):
         signing_request_repo: SigningRequestRepository,
         hsm_client: HSMClient,
         pades_signer: PAdESSigner,
-        intermediate_cache: IntermediateCertificateCache,
+        intermediate_cache: CertificateChainCache,
         idempotency_repo=None,
         audit_dispatcher: Optional[AuditEventDispatcher] = None,
         *,

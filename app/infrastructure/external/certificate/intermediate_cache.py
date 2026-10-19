@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict
 from uuid import UUID
 
+from app.domain.ports.output.CertificateChainCache import CertificateChainCache
 from app.domain.ports.output.CertificateClient import CertificateClient
 
 
@@ -28,7 +29,7 @@ class _CacheEntry:
     cached_at: datetime
 
 
-class IntermediateCertificateCache:
+class IntermediateCertificateCache(CertificateChainCache):
     def __init__(self, certificate_client: CertificateClient, ttl: timedelta):
         self._client = certificate_client
         self._ttl = ttl
