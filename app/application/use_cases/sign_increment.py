@@ -30,6 +30,7 @@ from app.domain.ports.input.SignIncrementUseCase import (
     SignIncrementUseCase,
 )
 from py_common.audit import AuditEventDispatcher
+from app.domain.ports.output.CertificateChainCache import CertificateChainCache
 from app.domain.ports.output.CertificateClient import CertificateClient
 from app.domain.ports.output.HSMClient import HSMClient
 from app.domain.ports.output.PAdESSigner import PAdESSigner
@@ -39,9 +40,6 @@ from app.domain.ports.output.SigningRequestRepository import (
 )
 from app.domain.ports.output.SigningSessionRepository import SigningSessionRepository
 from py_common.auth.identity_context import IdentityContext
-from app.infrastructure.external.certificate.intermediate_cache import (
-    IntermediateCertificateCache,
-)
 from py_common.core.request_context import get_context_values
 
 _SERVICE_NAME = "signing-service"
@@ -58,7 +56,7 @@ class SignIncrementUseCaseImpl(SignIncrementUseCase):
         session_repo: SigningSessionRepository,
         hsm_client: HSMClient,
         pades_signer: PAdESSigner,
-        intermediate_cache: IntermediateCertificateCache,
+        intermediate_cache: CertificateChainCache,
         idempotency_repo=None,
         audit_dispatcher: Optional[AuditEventDispatcher] = None,
         *,

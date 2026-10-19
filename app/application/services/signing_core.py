@@ -39,6 +39,7 @@ from app.domain.exceptions.domain_errors import (
     SigningRequestNotPendingError,
     ValidationError,
 )
+from app.domain.ports.output.CertificateChainCache import CertificateChainCache
 from app.domain.ports.output.CertificateClient import CertificateClient
 from app.domain.ports.output.HSMClient import HSMClient
 from app.domain.ports.output.PAdESSigner import PAdESSigner
@@ -50,9 +51,6 @@ from app.domain.ports.output.SigningSessionRepository import SigningSessionRepos
 from py_common.auth.identity_context import IdentityContext
 from py_common.auth.owner_type import OwnerType
 from app.domain.valueobjects.SigningRequestStatus import SigningRequestStatus
-from app.infrastructure.external.certificate.intermediate_cache import (
-    IntermediateCertificateCache,
-)
 
 _HASH_ALGORITHM = "SHA256"
 _PDF_MAGIC = b"%PDF-"
@@ -128,7 +126,7 @@ async def perform_signature_step(
     session_repo: SigningSessionRepository,
     hsm_client: HSMClient,
     pades_signer: PAdESSigner,
-    intermediate_cache: IntermediateCertificateCache,
+    intermediate_cache: CertificateChainCache,
     tenant_id: UUID,
     signing_request_id: UUID,
     certificate_id: UUID,
