@@ -48,6 +48,14 @@ services:
       # Auditoría: hybrid cae a solo-DB si no hay AUDIT_HTTP_BASE_URL (ver py_common.audit.factory, en py-common)
       AUDIT_ENABLED: "true"
       AUDIT_STRATEGY: hybrid
+
+      # Key estática fake compartida por los 4 productores de eventos de
+      # auditoría en dev (nunca en staging/producción). Ver
+      # platform-infra/README.md y docs/service-key-map.md para el mecanismo
+      # real (una key por servicio, generada por
+      # platform-infra/scripts/generate-service-keys.sh). Todavía sin
+      # consumidor en este código -- eso es otra tarea (py-common).
+      AUDIT_SERVICE_API_KEY: "dev-audit-shared-key-never-use-outside-dev"
     ports:
       - "8001:8001"
     volumes:
