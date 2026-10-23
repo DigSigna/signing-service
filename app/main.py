@@ -183,6 +183,8 @@ async def startup_event():
             storage=audit_storage,
             http_base_url=settings.AUDIT_HTTP_BASE_URL,
             service_name="signing-service",
+            api_key=settings.AUDIT_API_KEY,
+            logger=logger,
         )
         audit_worker = AuditWorker(audit_recorder)
         app.state.audit_session = audit_session

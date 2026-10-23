@@ -55,7 +55,7 @@ services:
       # real (una key por servicio, generada por
       # platform-infra/scripts/generate-service-keys.sh). Todavía sin
       # consumidor en este código -- eso es otra tarea (py-common).
-      AUDIT_SERVICE_API_KEY: "dev-audit-shared-key-never-use-outside-dev"
+      AUDIT_API_KEY: "dev-audit-shared-key-never-use-outside-dev"
     ports:
       - "8001:8001"
     volumes:
