@@ -6,14 +6,14 @@ redis==5.0.1
 psycopg2-binary==2.9.9
 SQLAlchemy==2.0.30
 asyncpg==0.29.0
-asyncmy==0.2.9
-requests==2.32.3
+asyncmy==0.2.17
+requests==2.34.2
 httpx==0.27.0
 # pyhanko 0.37.0 requires cryptography>=48.0.0 — widened from the old
 # <43.0.0 cap (ADR-005/signing-plan point 1: real PAdES signing).
 cryptography>=48.0.0,<51.0.0
-PyJWT==2.8.0
-python-multipart==0.0.6
+PyJWT==2.15.1
+python-multipart==0.0.31
 
 # PAdES signing (signing-plan.md point 1) — PDF incremental updates +
 # byte-range signing, never done by hand.

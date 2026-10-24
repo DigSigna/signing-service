@@ -33,9 +33,9 @@ class SQLAlchemySigningRequestRepository(SigningRequestRepository):
             SigningRequestModel(
                 id=str(request.id),
                 tenant_id=str(request.tenant_id),
-                organization_id=str(request.organization_id)
-                if request.organization_id
-                else None,
+                organization_id=(
+                    str(request.organization_id) if request.organization_id else None
+                ),
                 user_id=str(request.user_id) if request.user_id else None,
                 key_id=None,
                 document_hash=request.document_hash,
