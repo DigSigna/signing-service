@@ -27,9 +27,21 @@ services:
       # Esquema MySQL compartido con hsm-service (ver nota arriba)
       DB_URL: "mysql://digsigna:digsigna@mysql:3306/digsigna"
 
-      # Auth JWT local (clave pública montada desde ./keys)
-      AUTH_MODE: development
-      AUTH_PUBLIC_KEY_PATH: /app/keys/public.pem
+      # Auth: JWKS real de identification-service en vez de la llave pública
+      # local (antes montada desde ./keys) -- mismo razonamiento que
+      # hsm-service/certificate-service, ver sus respectivos
+      # docker-compose.dev.yml. AUTH_ISSUER/AUTH_AUDIENCE fijados para
+      # igualar el chequeo que hsm-service ya hardcodea
+      # (identification-service emite iss="identification-service", aud
+      # incluye "signing-service", ver signer.js). Requiere
+      # identification-service corriendo (cd ../identification-service &&
+      # make dev-up) antes de este servicio: la carga inicial de llaves
+      # hace fetch de JWKS al boot en modo production, sin fallback a una
+      # llave local si falla.
+      AUTH_MODE: production
+      AUTH_JWKS_URL: "http://identification-service:3000/.well-known/jwks.json"
+      AUTH_ISSUER: identification-service
+      AUTH_AUDIENCE: signing-service
       AUTH_TOKEN_CACHE_ENABLED: "false"
 
       # HSM real vía hsm-service (nombre de servicio en hsm-network, puerto interno del contenedor)
@@ -48,6 +60,11 @@ services:
       # Auditoría: hybrid cae a solo-DB si no hay AUDIT_HTTP_BASE_URL (ver py_common.audit.factory, en py-common)
       AUDIT_ENABLED: "true"
       AUDIT_STRATEGY: hybrid
+    # on-failure: KeyManagerAdapter hace fetch de JWKS al boot -- en un cold
+    # start, identification-service puede no estar arriba todavía. Docker
+    # reintenta con backoff creciente hasta que responda, en vez de quedar
+    # "Exited" esperando un restart manual.
+    restart: on-failure
     ports:
       - "8001:8001"
     volumes:
