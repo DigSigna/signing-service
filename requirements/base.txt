@@ -25,4 +25,4 @@ pyhanko-certvalidator==0.32.1
 # DIGSIGNA_COMMON_TOKEN (fine-grained PAT with read access to
 # DigSigna/py-common) must be set as a CI secret here and in
 # certificate-service for `pip install` to reach this private repo.
-git+https://x-access-token:${DIGSIGNA_COMMON_TOKEN}@github.com/DigSigna/py-common.git@v0.1.0
+git+https://x-access-token:${DIGSIGNA_COMMON_TOKEN}@github.com/DigSigna/py-common.git@v0.2.1
