@@ -250,6 +250,17 @@ class Settings(BaseSettings):
             "AUDIT_HTTP_TIMEOUT", AliasPath("audit", "http", "timeout")
         ),
     )
+    # Key estática de servicio para autenticar contra POST /api/v1/events de
+    # audit-service (header X-Service-API-Key). Nombre de env var literal
+    # SIN prefijo AUDIT_HTTP_ a propósito: go-common, py-common, y el
+    # cliente JS de identification-service leen el mismo AUDIT_API_KEY (ver
+    # platform-infra/docs/service-key-map.md).
+    AUDIT_API_KEY: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "AUDIT_API_KEY", AliasPath("audit", "http", "api_key")
+        ),
+    )
     AUDIT_HYBRID_MAX_FAILURES: int = Field(
         default=3,
         validation_alias=AliasChoices(
