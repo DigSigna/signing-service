@@ -28,9 +28,12 @@ services:
       DB_URL: "mysql://digsigna:digsigna@mysql:3306/digsigna"
 
       # Auth JWT local (clave pública montada desde ./keys)
-      AUTH_MODE: development
-      AUTH_PUBLIC_KEY_PATH: /app/keys/public.pem
+      AUTH_MODE: production
+      AUTH_JWKS_URL: "http://identification-service:3000/.well-known/jwks.json"
+      AUTH_ISSUER: identification-service
+      AUTH_AUDIENCE: signing-service
       AUTH_TOKEN_CACHE_ENABLED: "false"
+      
 
       # HSM real vía hsm-service (nombre de servicio en hsm-network, puerto interno del contenedor)
       HSM_BACKEND: remote
