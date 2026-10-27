@@ -244,7 +244,9 @@ class GetSigningRequestResponse(BaseModel):
             signatures_count=result.signatures_count,
             created_at=result.created_at,
             completed_at=result.completed_at,
-            document_b64=base64.b64encode(result.document).decode("utf-8")
-            if result.document is not None
-            else None,
+            document_b64=(
+                base64.b64encode(result.document).decode("utf-8")
+                if result.document is not None
+                else None
+            ),
         )

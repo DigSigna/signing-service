@@ -27,7 +27,17 @@ services:
       # Esquema MySQL compartido con hsm-service (ver nota arriba)
       DB_URL: "mysql://digsigna:digsigna@mysql:3306/digsigna"
 
-      # Auth JWT local (clave pública montada desde ./keys)
+      # Auth: JWKS real de identification-service en vez de la llave pública
+      # local (antes montada desde ./keys) -- mismo razonamiento que
+      # hsm-service/certificate-service, ver sus respectivos
+      # docker-compose.dev.yml. AUTH_ISSUER/AUTH_AUDIENCE fijados para
+      # igualar el chequeo que hsm-service ya hardcodea
+      # (identification-service emite iss="identification-service", aud
+      # incluye "signing-service", ver signer.js). Requiere
+      # identification-service corriendo (cd ../identification-service &&
+      # make dev-up) antes de este servicio: la carga inicial de llaves
+      # hace fetch de JWKS al boot en modo production, sin fallback a una
+      # llave local si falla.
       AUTH_MODE: production
       AUTH_JWKS_URL: "http://identification-service:3000/.well-known/jwks.json"
       AUTH_ISSUER: identification-service

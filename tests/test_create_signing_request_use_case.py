@@ -35,7 +35,7 @@ def _identity() -> IdentityContext:
         max_cert_level=2,
         can_certify=False,
         certification_path="",
-        permissions={},
+        permissions=[],
     )
 
 
