@@ -31,7 +31,7 @@ from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
 from pyhanko.pdf_utils.misc import PdfError
 from pyhanko.sign import PdfSignatureMetadata, async_sign_pdf
 from pyhanko.sign.fields import SigSeedSubFilter
-from pyhanko.sign.general import load_certs_from_pemder_data
+from pyhanko.sign.general import SigningError, load_certs_from_pemder_data
 from pyhanko.sign.signers.pdf_cms import Signer
 from pyhanko.sign.timestamps import TimeStamper
 from pyhanko_certvalidator.registry import SimpleCertificateStore
@@ -222,12 +222,23 @@ class PyHankoPAdESSigner(PAdESSigner):
         timestamper: Optional[TimeStamper],
     ):
         try:
-            writer = IncrementalPdfFileWriter(io.BytesIO(document))
+            # strict=False: many real-world PDFs (Chrome print-to-PDF,
+            # LibreOffice, older Acrobat compatibility settings) carry a
+            # hybrid cross-reference section for backward compatibility.
+            # pyHanko refuses to append an incremental update to those in
+            # strict mode (SigningError below) even though the structure
+            # itself is spec-valid — only non-strict parsing tolerates it.
+            writer = IncrementalPdfFileWriter(io.BytesIO(document), strict=False)
             return await async_sign_pdf(
                 writer, metadata, signer=signer, timestamper=timestamper
             )
         except PdfError as exc:
             raise ValidationError(
                 f"document_b64 is not a well-formed PDF: {exc}",
+                field="document_b64",
+            ) from exc
+        except SigningError as exc:
+            raise ValidationError(
+                f"document_b64 cannot be signed: {exc}",
                 field="document_b64",
             ) from exc
