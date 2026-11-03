@@ -39,6 +39,7 @@ from app.domain.ports.output.SigningRequestRepository import (
     SigningRequestRepository,
 )
 from app.domain.ports.output.SigningSessionRepository import SigningSessionRepository
+from app.domain.ports.output.TenantRepository import TenantRepository
 from py_common.auth.identity_context import IdentityContext
 from py_common.core.request_context import get_context_values
 
@@ -57,6 +58,7 @@ class SignIncrementUseCaseImpl(SignIncrementUseCase):
         hsm_client: HSMClient,
         pades_signer: PAdESSigner,
         intermediate_cache: CertificateChainCache,
+        tenant_repo: TenantRepository,
         idempotency_repo=None,
         audit_dispatcher: Optional[AuditEventDispatcher] = None,
         *,
@@ -70,6 +72,7 @@ class SignIncrementUseCaseImpl(SignIncrementUseCase):
         self._hsm_client = hsm_client
         self._pades_signer = pades_signer
         self._intermediate_cache = intermediate_cache
+        self._tenant_repo = tenant_repo
         self._idempotency_repo = idempotency_repo
         self._audit_dispatcher = audit_dispatcher
         self._session_ttl_minutes = session_ttl_minutes
@@ -118,6 +121,7 @@ class SignIncrementUseCaseImpl(SignIncrementUseCase):
                 hsm_client=self._hsm_client,
                 pades_signer=self._pades_signer,
                 intermediate_cache=self._intermediate_cache,
+                tenant_repo=self._tenant_repo,
                 tenant_id=tenant_id,
                 signing_request_id=command.signing_request_id,
                 certificate_id=command.certificate_id,

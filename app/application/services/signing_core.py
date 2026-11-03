@@ -48,12 +48,18 @@ from app.domain.ports.output.SigningRequestRepository import (
     SigningRequestRepository,
 )
 from app.domain.ports.output.SigningSessionRepository import SigningSessionRepository
+from app.domain.ports.output.TenantRepository import TenantRepository
 from py_common.auth.identity_context import IdentityContext
 from py_common.auth.owner_type import OwnerType
 from app.domain.valueobjects.SigningRequestStatus import SigningRequestStatus
 
 _HASH_ALGORITHM = "SHA256"
 _PDF_MAGIC = b"%PDF-"
+# Fallback for the signature's visible appearance (UI only, see
+# PAdESSigner.sign_pdf's docstring) if the tenant row is somehow
+# missing — this must never block an otherwise-valid signature over a
+# cosmetic detail.
+_UNKNOWN_TENANT_NAME = "N/D"
 
 
 def require_pdf(document: bytes) -> None:
@@ -127,6 +133,7 @@ async def perform_signature_step(
     hsm_client: HSMClient,
     pades_signer: PAdESSigner,
     intermediate_cache: CertificateChainCache,
+    tenant_repo: TenantRepository,
     tenant_id: UUID,
     signing_request_id: UUID,
     certificate_id: UUID,
@@ -212,6 +219,17 @@ async def perform_signature_step(
     is_final = signing_request.is_final_signature()
     field_name = f"Signature{signing_request.signatures_count + 1}"
 
+    # Both UI only (PAdESSigner.sign_pdf's docstring) — never block a
+    # cryptographically valid signature over either being unavailable.
+    tenant = await tenant_repo.find_by_id(tenant_id)
+    tenant_name = tenant.name if tenant else _UNKNOWN_TENANT_NAME
+    # chain.chain is leaf-first, root-last (ValidateCertificateChainUseCaseImpl
+    # walks up via issuer_certificate_id and stops once a self-signed
+    # certificate — the root — is appended; verified against
+    # certificate-service's actual implementation, not assumed from the
+    # port's docstring).
+    root_ca_name = chain.chain[-1].common_name if chain.chain else None
+
     pades_result = await pades_signer.sign_pdf(
         document=signing_request.document_blob,
         leaf_cert_pem=certificate.pem,
@@ -219,8 +237,12 @@ async def perform_signature_step(
         key_id=certificate.key_id,
         hsm_client=hsm_client,
         bearer_token=bearer_token,
+        signing_request_id=signing_request.id,
+        tenant_name=tenant_name,
         field_name=field_name,
         apply_timestamp=is_final,
+        signer_index=signing_request.signatures_count,
+        root_ca_name=root_ca_name,
     )
 
     session = await record_signature(session_repo, session)

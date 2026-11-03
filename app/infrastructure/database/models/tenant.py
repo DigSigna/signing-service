@@ -7,5 +7,6 @@ class Tenant(Base):
     __tablename__ = "tenants"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
     mode: Mapped[str] = mapped_column(String(20), nullable=True)
     hsm_slot_id: Mapped[str] = mapped_column(String(36), nullable=True)

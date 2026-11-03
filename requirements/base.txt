@@ -20,6 +20,11 @@ python-multipart==0.0.31
 pyhanko==0.37.0
 pyhanko-certvalidator==0.32.1
 
+# Visible signature appearance's QR code (pyhanko.stamp.QRStampStyle) —
+# pyHanko's own "qr" extra isn't pulled in automatically by a plain
+# `pyhanko==` pin, so it's listed here explicitly.
+qrcode==8.2
+
 # Pinned to a tag, not @main, so this stays reproducible — bump this
 # deliberately (new tag in py-common first) rather than letting it float.
 # DIGSIGNA_COMMON_TOKEN (fine-grained PAT with read access to

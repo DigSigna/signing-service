@@ -31,6 +31,12 @@ from app.infrastructure.database.repositories.signing_pin_session_repository imp
 from app.infrastructure.database.repositories.signing_request_repository import (
     SQLAlchemySigningRequestRepository,
 )
+from app.infrastructure.database.repositories.tenant_repository import (
+    SQLAlchemyTenantRepository,
+)
+from app.infrastructure.database.adapters.audited_tenant_repository import (
+    AuditedTenantRepository,
+)
 from app.infrastructure.database.session import get_session
 from py_common.auth.permissions import get_identity_context
 from app.interfaces.dependencies import (
@@ -117,6 +123,12 @@ def _signing_request_repo(session: AsyncSession) -> SQLAlchemySigningRequestRepo
     return SQLAlchemySigningRequestRepository(session)
 
 
+def _tenant_repo(request: Request, session: AsyncSession) -> AuditedTenantRepository:
+    return AuditedTenantRepository(
+        SQLAlchemyTenantRepository(session), get_audit_dispatcher(request)
+    )
+
+
 def _build_sign_document_use_case(
     request: Request, session: AsyncSession
 ) -> SignDocumentUseCaseImpl:
@@ -129,6 +141,7 @@ def _build_sign_document_use_case(
         hsm_client=get_hsm_client(request),
         pades_signer=get_pades_signer(request),
         intermediate_cache=get_intermediate_cache(request),
+        tenant_repo=_tenant_repo(request, session),
         idempotency_repo=SQLAlchemyIdempotencyRepository(session),
         audit_dispatcher=get_audit_dispatcher(request),
         session_ttl_minutes=settings.SIGNING_PIN_SESSION_TTL_MINUTES,
@@ -158,6 +171,7 @@ def _build_sign_increment_use_case(
         hsm_client=get_hsm_client(request),
         pades_signer=get_pades_signer(request),
         intermediate_cache=get_intermediate_cache(request),
+        tenant_repo=_tenant_repo(request, session),
         idempotency_repo=SQLAlchemyIdempotencyRepository(session),
         audit_dispatcher=get_audit_dispatcher(request),
         session_ttl_minutes=settings.SIGNING_PIN_SESSION_TTL_MINUTES,
