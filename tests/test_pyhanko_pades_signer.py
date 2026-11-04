@@ -29,6 +29,8 @@ from app.infrastructure.crypto.fallback_timestamper import FallbackChainTimeStam
 from app.infrastructure.crypto.pyhanko_pades_signer import PyHankoPAdESSigner
 
 KEY_ID = UUID(int=42)
+SIGNING_REQUEST_ID = UUID(int=7)
+TENANT_NAME = "Acme Corp"
 
 
 class _AlwaysFailingTimeStamper(TimeStamper):
@@ -221,6 +223,8 @@ async def test_sign_pdf_without_tsa_configured_produces_pades_b():
         key_id=KEY_ID,
         hsm_client=hsm,
         bearer_token="caller-jwt",
+        signing_request_id=SIGNING_REQUEST_ID,
+        tenant_name=TENANT_NAME,
     )
 
     assert result.signed_document.startswith(b"%PDF-")
@@ -265,6 +269,8 @@ async def test_sign_pdf_embeds_real_tsa_token_when_available():
         key_id=KEY_ID,
         hsm_client=hsm,
         bearer_token="caller-jwt",
+        signing_request_id=SIGNING_REQUEST_ID,
+        tenant_name=TENANT_NAME,
     )
 
     assert result.signature_format == "PAdES-T"
@@ -303,6 +309,8 @@ async def test_sign_pdf_falls_back_to_pseudo_timestamp_when_tsa_unavailable():
         key_id=KEY_ID,
         hsm_client=hsm,
         bearer_token="caller-jwt",
+        signing_request_id=SIGNING_REQUEST_ID,
+        tenant_name=TENANT_NAME,
     )
 
     assert result.signature_format == "PAdES-B"
@@ -338,6 +346,8 @@ async def test_sign_pdf_with_apply_timestamp_false_skips_tsa_entirely():
         key_id=KEY_ID,
         hsm_client=hsm,
         bearer_token="caller-jwt",
+        signing_request_id=SIGNING_REQUEST_ID,
+        tenant_name=TENANT_NAME,
         apply_timestamp=False,
     )
 
@@ -377,8 +387,11 @@ async def test_sign_pdf_two_signers_each_get_their_own_field_and_delta():
         key_id=KEY_ID,
         hsm_client=hsm,
         bearer_token="caller-jwt",
+        signing_request_id=SIGNING_REQUEST_ID,
+        tenant_name=TENANT_NAME,
         field_name="Signature1",
         apply_timestamp=False,
+        signer_index=0,
     )
     assert first.tsa_provider is None
 
@@ -389,8 +402,11 @@ async def test_sign_pdf_two_signers_each_get_their_own_field_and_delta():
         key_id=KEY_ID,
         hsm_client=hsm,
         bearer_token="caller-jwt",
+        signing_request_id=SIGNING_REQUEST_ID,
+        tenant_name=TENANT_NAME,
         field_name="Signature2",
         apply_timestamp=True,
+        signer_index=1,
     )
     assert second.tsa_provider == "test-tsa"
     assert second.tsa_token is not None
@@ -414,6 +430,207 @@ async def test_sign_pdf_two_signers_each_get_their_own_field_and_delta():
 
 
 @pytest.mark.asyncio
+async def test_sign_pdf_appearance_shows_tenant_and_root_ca():
+    """Multi-tenant SaaS: the stamp must show which organization (tenant)
+    the signature is under, not a generic platform-wide label, plus the
+    root CA's name when the caller has one (from
+    CertificateClient.validate_chain's chain.chain[-1] in
+    signing_core.perform_signature_step — this test passes it directly).
+    Both are UI only; omitting root_ca_name must not fail the signature,
+    just fall back to a placeholder."""
+    leaf_key, leaf_pem, inter_pem, _root_pem = _make_chain()
+    hsm = _FakeHsmClient(leaf_key)
+    signer = PyHankoPAdESSigner()
+
+    with_root_ca = await signer.sign_pdf(
+        document=_minimal_pdf(),
+        leaf_cert_pem=leaf_pem,
+        chain_pems=[inter_pem],
+        key_id=KEY_ID,
+        hsm_client=hsm,
+        bearer_token="caller-jwt",
+        signing_request_id=SIGNING_REQUEST_ID,
+        tenant_name="Acme Corp",
+        root_ca_name="Acme Root CA",
+        field_name="Signature1",
+        apply_timestamp=False,
+        signer_index=0,
+    )
+    reader = PdfFileReader(io.BytesIO(with_root_ca.signed_document))
+    content = _appearance_bytes(reader.embedded_signatures[0])
+    assert b"Acme Corp" in content
+    assert b"Acme Root CA" in content
+
+    without_root_ca = await signer.sign_pdf(
+        document=_minimal_pdf(),
+        leaf_cert_pem=leaf_pem,
+        chain_pems=[inter_pem],
+        key_id=KEY_ID,
+        hsm_client=hsm,
+        bearer_token="caller-jwt",
+        signing_request_id=SIGNING_REQUEST_ID,
+        tenant_name="Acme Corp",
+        field_name="Signature1",
+        apply_timestamp=False,
+        signer_index=0,
+    )
+    reader2 = PdfFileReader(io.BytesIO(without_root_ca.signed_document))
+    content2 = _appearance_bytes(reader2.embedded_signatures[0])
+    # '/' is octal-escaped (\057) inside a PDF literal string by
+    # pyHanko's writer — this is the escaped form, not "N/D" verbatim.
+    assert rb"N\057D" in content2
+
+
+def _appearance_bytes(embedded_signature) -> bytes:
+    return embedded_signature.sig_field["/AP"]["/N"].get_object().data
+
+
+@pytest.mark.asyncio
+async def test_sign_pdf_adds_one_visible_signatures_page():
+    """Not required for a valid PAdES-B signature on its own (pyHanko
+    already produces one with zero visual footprint) — this is the
+    human-visible appearance (see the module docstring's rationale).
+    signer_index=0 must append exactly one new page, and the signature
+    field must be visible (non-empty /Rect + a rendered /AP) on it."""
+    leaf_key, leaf_pem, inter_pem, root_pem = _make_chain()
+    hsm = _FakeHsmClient(leaf_key)
+    signer = PyHankoPAdESSigner()
+    original = _minimal_pdf()
+    original_pages = PdfFileReader(io.BytesIO(original)).root["/Pages"]["/Count"]
+
+    result = await signer.sign_pdf(
+        document=original,
+        leaf_cert_pem=leaf_pem,
+        chain_pems=[inter_pem],
+        key_id=KEY_ID,
+        hsm_client=hsm,
+        bearer_token="caller-jwt",
+        signing_request_id=SIGNING_REQUEST_ID,
+        tenant_name=TENANT_NAME,
+        field_name="Signature1",
+        apply_timestamp=False,
+        signer_index=0,
+    )
+
+    reader = PdfFileReader(io.BytesIO(result.signed_document))
+    assert reader.root["/Pages"]["/Count"] == original_pages + 1
+
+    sig = reader.embedded_signatures[0]
+    rect = sig.sig_field.get("/Rect")
+    assert rect is not None and len(rect) == 4
+    assert rect[2] > rect[0] and rect[3] > rect[1]  # non-degenerate box
+    assert "/AP" in sig.sig_field  # a real appearance was rendered
+
+    # The crypto signature itself must still validate — the appearance
+    # is purely cosmetic, never a substitute for it.
+    status = await _trusted_status(result.signed_document, root_pem)
+    assert status.intact is True
+    assert status.valid is True
+
+
+def _page_xobject_bytes(reader: PdfFileReader, page_ix: int) -> bytes:
+    page_ref, _ = reader.find_page_for_modification(page_ix)
+    page_obj = page_ref.get_object()
+    try:
+        xobjects = page_obj["/Resources"]["/XObject"]
+    except KeyError:
+        return b""
+    return b"".join(ref.get_object().data for ref in xobjects.values())
+
+
+@pytest.mark.asyncio
+async def test_sign_pdf_footers_every_original_page_with_the_verification_code():
+    """Every page the document had *before* signing gets a small footer
+    repeating the same verification code shown on the signatures page —
+    a UI aid so a printed/skimmed copy visibly "belongs together", not
+    extra cryptographic protection (the byte-range signature already
+    covers these pages regardless). The appended signatures page itself
+    doesn't need it — it already shows the code prominently."""
+    leaf_key, leaf_pem, inter_pem, root_pem = _make_chain()
+    hsm = _FakeHsmClient(leaf_key)
+    signer = PyHankoPAdESSigner()
+    original = _minimal_pdf()
+    original_pages = PdfFileReader(io.BytesIO(original)).root["/Pages"]["/Count"]
+
+    result = await signer.sign_pdf(
+        document=original,
+        leaf_cert_pem=leaf_pem,
+        chain_pems=[inter_pem],
+        key_id=KEY_ID,
+        hsm_client=hsm,
+        bearer_token="caller-jwt",
+        signing_request_id=SIGNING_REQUEST_ID,
+        tenant_name=TENANT_NAME,
+        field_name="Signature1",
+        apply_timestamp=False,
+        signer_index=0,
+    )
+
+    reader = PdfFileReader(io.BytesIO(result.signed_document))
+    for page_ix in range(original_pages):
+        assert b"Codigo de verificacion" in _page_xobject_bytes(reader, page_ix)
+
+    status = await _trusted_status(result.signed_document, root_pem)
+    assert status.intact is True
+    assert status.valid is True
+
+
+@pytest.mark.asyncio
+async def test_sign_pdf_two_signers_share_one_signatures_page():
+    """The second signer must NOT get a second appended page — both
+    stamps stack onto the same one, created by the first signer
+    (signer_index=0) and reused via on_page=-1 for signer_index=1."""
+    leaf_key, leaf_pem, inter_pem, root_pem = _make_chain()
+    hsm = _FakeHsmClient(leaf_key)
+    signer = PyHankoPAdESSigner()
+    original = _minimal_pdf()
+    original_pages = PdfFileReader(io.BytesIO(original)).root["/Pages"]["/Count"]
+
+    first = await signer.sign_pdf(
+        document=original,
+        leaf_cert_pem=leaf_pem,
+        chain_pems=[inter_pem],
+        key_id=KEY_ID,
+        hsm_client=hsm,
+        bearer_token="caller-jwt",
+        signing_request_id=SIGNING_REQUEST_ID,
+        tenant_name=TENANT_NAME,
+        field_name="Signature1",
+        apply_timestamp=False,
+        signer_index=0,
+    )
+    second = await signer.sign_pdf(
+        document=first.signed_document,
+        leaf_cert_pem=leaf_pem,
+        chain_pems=[inter_pem],
+        key_id=KEY_ID,
+        hsm_client=hsm,
+        bearer_token="caller-jwt",
+        signing_request_id=SIGNING_REQUEST_ID,
+        tenant_name=TENANT_NAME,
+        field_name="Signature2",
+        apply_timestamp=False,
+        signer_index=1,
+    )
+
+    reader = PdfFileReader(io.BytesIO(second.signed_document))
+    assert reader.root["/Pages"]["/Count"] == original_pages + 1
+
+    rects = [sig.sig_field.get("/Rect") for sig in reader.embedded_signatures]
+    assert len(rects) == 2
+    # Stacked, not overlapping: distinct vertical position.
+    assert rects[0][1] != rects[1][1]
+
+    root_cert = next(load_certs_from_pemder_data(root_pem.encode("ascii")))
+    vc = ValidationContext(trust_roots=[root_cert])
+    statuses = [
+        await async_validate_pdf_signature(sig, signer_validation_context=vc)
+        for sig in reader.embedded_signatures
+    ]
+    assert all(s.intact and s.valid for s in statuses)
+
+
+@pytest.mark.asyncio
 async def test_sign_pdf_rejects_non_pdf_document():
     leaf_key, leaf_pem, inter_pem, _root_pem = _make_chain()
     hsm = _FakeHsmClient(leaf_key)
@@ -427,6 +644,8 @@ async def test_sign_pdf_rejects_non_pdf_document():
             key_id=KEY_ID,
             hsm_client=hsm,
             bearer_token="caller-jwt",
+            signing_request_id=SIGNING_REQUEST_ID,
+            tenant_name=TENANT_NAME,
         )
 
     assert exc_info.value.field == "document_b64"

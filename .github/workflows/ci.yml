@@ -107,3 +107,14 @@ jobs:
       run: |
         docker push ghcr.io/${{ steps.vars.outputs.repo_lower }}:${{ steps.vars.outputs.version }}
         docker push ghcr.io/${{ steps.vars.outputs.repo_lower }}:latest
+
+  deploy:
+    name: Deploy to DOKS
+    needs: publish
+    # Same gate as publish: only a real push to main, never a PR.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: DigSigna/platform-infra/.github/workflows/deploy.yml@main
+    with:
+      service: signing-service
+      tag: 1.0.${{ github.run_number }}
+    secrets: inherit

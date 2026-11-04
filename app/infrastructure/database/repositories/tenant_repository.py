@@ -51,4 +51,6 @@ class SQLAlchemyTenantRepository(TenantRepository):
 
 def _to_entity(row: TenantModel) -> TenantEntity:
     mode = TenantMode(row.mode) if row.mode else TenantMode.MANAGED
-    return TenantEntity(id=UUID(row.id), mode=mode, hsm_slot_id=row.hsm_slot_id)
+    return TenantEntity(
+        id=UUID(row.id), name=row.name, mode=mode, hsm_slot_id=row.hsm_slot_id
+    )

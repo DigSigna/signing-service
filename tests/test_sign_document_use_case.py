@@ -29,6 +29,8 @@ from app.domain.ports.output.SigningRequestRepository import (
     SigningRequestRepository,
 )
 from app.domain.ports.output.SigningSessionRepository import SigningSessionRepository
+from app.domain.ports.output.TenantRepository import TenantRepository
+from app.domain.entities.Tenant import Tenant
 from py_common.auth.identity_context import IdentityContext
 from py_common.auth.owner_type import OwnerType
 from app.domain.valueobjects.SigningRequestStatus import SigningRequestStatus
@@ -205,8 +207,12 @@ class _FakePAdESSigner(PAdESSigner):
         key_id,
         hsm_client,
         bearer_token,
+        signing_request_id=None,
+        tenant_name=None,
         field_name="Signature1",
         apply_timestamp=True,
+        signer_index=0,
+        root_ca_name=None,
     ):
         self.calls.append(
             (document, leaf_cert_pem, tuple(chain_pems), key_id, bearer_token)
@@ -229,6 +235,20 @@ class _FakePAdESSigner(PAdESSigner):
         )
 
 
+class _FakeTenantRepository(TenantRepository):
+    async def find_by_id(self, tenant_id):
+        return Tenant(id=tenant_id, name="Acme Corp")
+
+    async def exists(self, tenant_id):
+        raise NotImplementedError
+
+    async def find_by_hsm_slot(self, slot):
+        raise NotImplementedError
+
+    async def update_hsm_slot(self, tenant_id, slot_id):
+        raise NotImplementedError
+
+
 def _build_use_case(
     certificate_client=None,
     pin_verifier=None,
@@ -236,6 +256,7 @@ def _build_use_case(
     signing_request_repo=None,
     hsm_client=None,
     pades_signer=None,
+    tenant_repo=None,
 ):
     certificate_client = certificate_client or _FakeCertificateClient()
     return SignDocumentUseCaseImpl(
@@ -248,6 +269,7 @@ def _build_use_case(
         intermediate_cache=IntermediateCertificateCache(
             certificate_client, ttl=timedelta(hours=1)
         ),
+        tenant_repo=tenant_repo or _FakeTenantRepository(),
         idempotency_repo=None,
         audit_dispatcher=None,
         session_ttl_minutes=20,

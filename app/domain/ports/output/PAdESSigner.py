@@ -47,8 +47,12 @@ class PAdESSigner(ABC):
         key_id: UUID,
         hsm_client: HSMClient,
         bearer_token: str,
+        signing_request_id: UUID,
+        tenant_name: str,
         field_name: str = "Signature1",
         apply_timestamp: bool = True,
+        signer_index: int = 0,
+        root_ca_name: Optional[str] = None,
     ) -> PAdESSignResult:
         """Produces the complete signed PDF (`document` plus a new
         incremental update containing this PAdES-B signature field) and,
@@ -57,6 +61,25 @@ class PAdESSigner(ABC):
         hash, and only ever *after* signing, since a signature
         timestamp's message imprint is computed over the signature
         value, which doesn't exist beforehand.
+
+        Also adds a *visible* signature appearance — not required for a
+        valid PAdES-B/T signature on its own, but end users have no way
+        to tell a document was signed just by opening it otherwise. The
+        appearance (signer name, tenant_name, root_ca_name if given,
+        timestamp, and a plain verification code — signing_request_id,
+        not a resolvable URL: see PyHankoPAdESSigner's module docstring
+        for why) is rendered on a dedicated page appended after the
+        document's own content, signer_index==0 creates that page and
+        the rest stack onto it — signer_index must equal how many
+        signatures this signing_request already has (0 for the first
+        signer, 1 for the second, ...), the same ordinal
+        perform_signature_step already uses for field_name. tenant_name
+        and root_ca_name are UI only — which organization/authority this
+        signature is under, same spirit as the appended page itself —
+        never anything checked by signature validation. root_ca_name
+        being None (chain resolution failed to produce one) just omits
+        that line rather than failing the signature over a cosmetic
+        detail.
 
         field_name must be unique within `document` — a multi-signer
         request (signing-plan.md point 4) calls this once per signer,
