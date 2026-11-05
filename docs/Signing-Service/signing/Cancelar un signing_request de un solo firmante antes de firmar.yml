@@ -1,0 +1,148 @@
+info:
+  name: Cancelar un signing_request de un solo firmante antes de firmar
+  type: http
+  seq: 4
+  tags:
+    - signing
+
+http:
+  method: POST
+  url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/cancel"
+  params:
+    - name: signing_request_id
+      value: ""
+      type: path
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false
+
+examples:
+  - name: 200 Response
+    description: Successful Response
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/cancel"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "signing_request_id": "",
+            "status": ""
+          }
+  - name: 403 Response
+    description: AuthorizationError — el caller no es el firmante registrado en el signing_request
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/cancel"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+    response:
+      status: 403
+      statusText: Forbidden
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "error": {
+              "code": "",
+              "message": "",
+              "details": {}
+            }
+          }
+  - name: 404 Response
+    description: NotFoundError — signing_request_id no existe o pertenece a otro tenant
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/cancel"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+    response:
+      status: 404
+      statusText: Not Found
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "error": {
+              "code": "",
+              "message": "",
+              "details": {}
+            }
+          }
+  - name: 409 Response
+    description: SigningRequestConflictError (otra escritura concurrente ganó la carrera — reintentar) o DuplicateRequestError
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/cancel"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+    response:
+      status: 409
+      statusText: Conflict
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "error": {
+              "code": "",
+              "message": "",
+              "details": {}
+            }
+          }
+  - name: 422 Response
+    description: SigningRequestNotCancellableError (signers_number > 1, u organization-owned sin firmante único) — fuera de alcance
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/cancel"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+    response:
+      status: 422
+      statusText: Unprocessable Entity
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "error": {
+              "code": "",
+              "message": "",
+              "details": {}
+            }
+          }
+
+docs: "Caso 2 de negocio: solo aplica a signing_requests con signers_number == 1, mientras siguen PENDING, y solo puede invocarlo quien figura como el firmante único (signing_requests.user_id). Un signing_request organization-owned (user_id NULL) está fuera de alcance en esta slice -- no hay un dueño único identificable."

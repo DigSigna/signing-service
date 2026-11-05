@@ -18,6 +18,13 @@ class GetSigningRequestResult:
     # Only set when status == COMPLETED (signing-plan.md point 4.2) —
     # the sole supported way to retrieve the signed document (point 5).
     document: Optional[bytes]
+    # Caso 3, Opción B (migration 031) — always surfaced regardless of
+    # status, never gated like `document`: these three are only ever
+    # populated once VoidSigningRequestUseCase has run, independent of
+    # whether the caller can also read the signed document.
+    superseded_by_signing_request_id: Optional[UUID] = None
+    voided_at: Optional[datetime] = None
+    void_reason: Optional[str] = None
 
 
 class GetSigningRequestUseCase(ABC):

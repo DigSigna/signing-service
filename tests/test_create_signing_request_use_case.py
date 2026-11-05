@@ -55,6 +55,12 @@ class _FakeSigningRequestRepository(SigningRequestRepository):
     async def append_signature(self, *args, **kwargs) -> bool:
         raise NotImplementedError
 
+    async def cancel(self, *args, **kwargs) -> bool:
+        raise NotImplementedError
+
+    async def void(self, *args, **kwargs) -> bool:
+        raise NotImplementedError
+
 
 @pytest.mark.asyncio
 async def test_create_signing_request_stores_document_as_pending():

@@ -6,6 +6,7 @@ more than one signature (signing-plan.md point 4)."""
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
@@ -140,6 +141,67 @@ class SQLAlchemySigningRequestRepository(SigningRequestRepository):
             await self._session.rollback()
             raise
 
+    async def cancel(
+        self,
+        signing_request_id: UUID,
+        expected_version: int,
+    ) -> bool:
+        stmt = (
+            update(SigningRequestModel)
+            .where(
+                SigningRequestModel.id == str(signing_request_id),
+                SigningRequestModel.version == expected_version,
+            )
+            .values(
+                status=SigningRequestStatus.CANCELLED.value,
+                version=SigningRequestModel.version + 1,
+            )
+        )
+        try:
+            result = await self._session.execute(stmt)
+            if result.rowcount == 0:
+                await self._session.rollback()
+                return False
+            await self._session.commit()
+            return True
+        except Exception:
+            await self._session.rollback()
+            raise
+
+    async def void(
+        self,
+        signing_request_id: UUID,
+        expected_version: int,
+        superseded_by_signing_request_id: UUID,
+        void_reason: str,
+        voided_at: datetime,
+    ) -> bool:
+        # status is deliberately absent from .values() -- Caso 3 Opción B
+        # never changes it, the row stays COMPLETED.
+        stmt = (
+            update(SigningRequestModel)
+            .where(
+                SigningRequestModel.id == str(signing_request_id),
+                SigningRequestModel.version == expected_version,
+            )
+            .values(
+                superseded_by_signing_request_id=str(superseded_by_signing_request_id),
+                voided_at=voided_at,
+                void_reason=void_reason,
+                version=SigningRequestModel.version + 1,
+            )
+        )
+        try:
+            result = await self._session.execute(stmt)
+            if result.rowcount == 0:
+                await self._session.rollback()
+                return False
+            await self._session.commit()
+            return True
+        except Exception:
+            await self._session.rollback()
+            raise
+
 
 def _to_entity(row: SigningRequestModel) -> SigningRequest:
     return SigningRequest(
@@ -157,4 +219,11 @@ def _to_entity(row: SigningRequestModel) -> SigningRequest:
         created_at=row.created_at,
         completed_at=row.completed_at,
         version=row.version,
+        superseded_by_signing_request_id=(
+            UUID(row.superseded_by_signing_request_id)
+            if row.superseded_by_signing_request_id
+            else None
+        ),
+        voided_at=row.voided_at,
+        void_reason=row.void_reason,
     )

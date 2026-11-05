@@ -8,6 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_201_CREATED, HTTP_400_BAD_REQUEST
 
+from app.application.use_cases.cancel_signing_request import (
+    CancelSigningRequestUseCaseImpl,
+)
 from app.application.use_cases.create_signing_request import (
     CreateSigningRequestUseCaseImpl,
 )
@@ -16,12 +19,21 @@ from app.application.use_cases.get_signing_request import (
 )
 from app.application.use_cases.sign_document import SignDocumentUseCaseImpl
 from app.application.use_cases.sign_increment import SignIncrementUseCaseImpl
+from app.application.use_cases.void_signing_request import (
+    VoidSigningRequestUseCaseImpl,
+)
 from app.core.config import get_settings
+from app.domain.ports.input.CancelSigningRequestUseCase import (
+    CancelSigningRequestCommand,
+)
 from app.domain.ports.input.CreateSigningRequestUseCase import (
     CreateSigningRequestCommand,
 )
 from app.domain.ports.input.SignDocumentUseCase import SignDocumentCommand
 from app.domain.ports.input.SignIncrementUseCase import SignIncrementCommand
+from app.domain.ports.input.VoidSigningRequestUseCase import (
+    VoidSigningRequestCommand,
+)
 from py_common.idempotency.sqlalchemy_repository import (
     SQLAlchemyIdempotencyRepository,
 )
@@ -50,6 +62,7 @@ from app.interfaces.dependencies import (
 )
 from app.interfaces.schemas.errors import ErrorResponse
 from app.interfaces.schemas.signing import (
+    CancelSigningRequestResponse,
     CreateSigningRequestRequest,
     CreateSigningRequestResponse,
     GetSigningRequestResponse,
@@ -57,6 +70,8 @@ from app.interfaces.schemas.signing import (
     SignDocumentResponse,
     SignIncrementRequest,
     SignIncrementResponse,
+    VoidSigningRequestRequest,
+    VoidSigningRequestResponse,
 )
 
 router = APIRouter()
@@ -109,6 +124,49 @@ _SIGN_INCREMENT_RESPONSES = {
     },
 }
 
+_CANCEL_SIGNING_REQUEST_RESPONSES = {
+    403: {
+        "model": ErrorResponse,
+        "description": "AuthorizationError — el caller no es el firmante "
+        "registrado en el signing_request",
+    },
+    404: {
+        "model": ErrorResponse,
+        "description": "NotFoundError — signing_request_id no existe o "
+        "pertenece a otro tenant",
+    },
+    409: {
+        "model": ErrorResponse,
+        "description": "SigningRequestConflictError (otra escritura "
+        "concurrente ganó la carrera — reintentar) o DuplicateRequestError",
+    },
+    422: {
+        "model": ErrorResponse,
+        "description": "SigningRequestNotCancellableError (signers_number > 1, "
+        "u organization-owned sin firmante único) — fuera de alcance",
+    },
+}
+
+_VOID_SIGNING_REQUEST_RESPONSES = {
+    403: {
+        "model": ErrorResponse,
+        "description": "AuthorizationError — el caller no es el firmante "
+        "registrado ni un admin de tenant/organización",
+    },
+    404: {
+        "model": ErrorResponse,
+        "description": "NotFoundError — signing_request_id no existe o "
+        "pertenece a otro tenant",
+    },
+    409: {
+        "model": ErrorResponse,
+        "description": "SigningRequestNotCompletedError (el signing_request "
+        "viejo nunca llegó a COMPLETED), SigningRequestConflictError (otra "
+        "escritura concurrente ganó la carrera — reintentar), o "
+        "DuplicateRequestError",
+    },
+}
+
 
 def _decode_document(document_b64: str) -> bytes:
     try:
@@ -153,6 +211,26 @@ def _build_create_signing_request_use_case(
     request: Request, session: AsyncSession
 ) -> CreateSigningRequestUseCaseImpl:
     return CreateSigningRequestUseCaseImpl(
+        signing_request_repo=_signing_request_repo(session),
+        idempotency_repo=SQLAlchemyIdempotencyRepository(session),
+        audit_dispatcher=get_audit_dispatcher(request),
+    )
+
+
+def _build_cancel_signing_request_use_case(
+    request: Request, session: AsyncSession
+) -> CancelSigningRequestUseCaseImpl:
+    return CancelSigningRequestUseCaseImpl(
+        signing_request_repo=_signing_request_repo(session),
+        idempotency_repo=SQLAlchemyIdempotencyRepository(session),
+        audit_dispatcher=get_audit_dispatcher(request),
+    )
+
+
+def _build_void_signing_request_use_case(
+    request: Request, session: AsyncSession
+) -> VoidSigningRequestUseCaseImpl:
+    return VoidSigningRequestUseCaseImpl(
         signing_request_repo=_signing_request_repo(session),
         idempotency_repo=SQLAlchemyIdempotencyRepository(session),
         audit_dispatcher=get_audit_dispatcher(request),
@@ -279,6 +357,58 @@ async def sign_increment(
     )
     result = await use_case.execute(command, identity, bearer_token)
     return SignIncrementResponse.from_result(result)
+
+
+@router.post(
+    "/signing-requests/{signing_request_id}/cancel",
+    response_model=CancelSigningRequestResponse,
+    summary="Cancelar un signing_request de un solo firmante antes de firmar",
+    description="Caso 2 de negocio: solo aplica a signing_requests con "
+    "signers_number == 1, mientras siguen PENDING, y solo puede invocarlo "
+    "quien figura como el firmante único (signing_requests.user_id). Un "
+    "signing_request organization-owned (user_id NULL) está fuera de "
+    "alcance en esta slice -- no hay un dueño único identificable.",
+    responses=_CANCEL_SIGNING_REQUEST_RESPONSES,
+)
+async def cancel_signing_request(
+    request: Request,
+    signing_request_id: UUID,
+    identity=Depends(get_identity_context),
+    session: AsyncSession = Depends(get_session),
+) -> CancelSigningRequestResponse:
+    use_case = _build_cancel_signing_request_use_case(request, session)
+    command = CancelSigningRequestCommand(signing_request_id=signing_request_id)
+    result = await use_case.execute(command, identity)
+    return CancelSigningRequestResponse.from_result(result)
+
+
+@router.post(
+    "/signing-requests/{signing_request_id}/void",
+    response_model=VoidSigningRequestResponse,
+    summary="Marcar un signing_request ya firmado como superado por otro",
+    description="Caso 3, Opción B: una firma ya aplicada no puede "
+    "invalidarse criptográficamente -- esto solo anota, a nivel de "
+    "negocio, que este signing_request COMPLETED ya no es el vigente. "
+    "Nunca cambia `status` (sigue COMPLETED), nunca toca "
+    "certificate-service. Puede invocarlo el propio firmante "
+    "(signing_requests.user_id) o un admin de tenant/organización.",
+    responses=_VOID_SIGNING_REQUEST_RESPONSES,
+)
+async def void_signing_request(
+    request: Request,
+    signing_request_id: UUID,
+    payload: VoidSigningRequestRequest,
+    identity=Depends(get_identity_context),
+    session: AsyncSession = Depends(get_session),
+) -> VoidSigningRequestResponse:
+    use_case = _build_void_signing_request_use_case(request, session)
+    command = VoidSigningRequestCommand(
+        signing_request_id=signing_request_id,
+        superseded_by_signing_request_id=payload.superseded_by_signing_request_id,
+        reason=payload.reason,
+    )
+    result = await use_case.execute(command, identity)
+    return VoidSigningRequestResponse.from_result(result)
 
 
 @router.get(
