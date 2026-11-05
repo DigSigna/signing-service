@@ -18,7 +18,12 @@ class SigningRequest(Base):
 
     key_id is legacy (pre-026): a multi-signer request has a different
     certificate/key per signer, recorded on each `signatures` row
-    instead, so new rows always write key_id=NULL here."""
+    instead, so new rows always write key_id=NULL here.
+
+    superseded_by_signing_request_id/voided_at/void_reason are migration
+    031 (Caso 3, Opción B) — a self-referencing FK, matching the real
+    FK convention already on organization_id/user_id/key_id in this same
+    table (all ON DELETE SET NULL)."""
 
     __tablename__ = "signing_requests"
 
@@ -37,3 +42,8 @@ class SigningRequest(Base):
     document_blob: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    superseded_by_signing_request_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True
+    )
+    voided_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
+    void_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

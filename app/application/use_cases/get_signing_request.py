@@ -47,4 +47,7 @@ class GetSigningRequestUseCaseImpl(GetSigningRequestUseCase):
             created_at=request.created_at,
             completed_at=request.completed_at,
             document=request.document_blob if is_completed else None,
+            superseded_by_signing_request_id=request.superseded_by_signing_request_id,
+            voided_at=request.voided_at,
+            void_reason=request.void_reason,
         )

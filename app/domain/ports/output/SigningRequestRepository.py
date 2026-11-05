@@ -51,3 +51,36 @@ class SigningRequestRepository(ABC):
         PIN/HSM/TSA chain unexpectedly for a signature that already
         exists)."""
         raise NotImplementedError
+
+    @abstractmethod
+    async def cancel(
+        self,
+        signing_request_id: UUID,
+        expected_version: int,
+    ) -> bool:
+        """Atomically transitions status PENDING -> CANCELLED (version
+        += 1), gated on the current version equalling `expected_version`
+        — same optimistic-concurrency pattern as append_signature.
+        Returns False (persisting nothing) if the version check fails —
+        a concurrent write (most plausibly the single signer's own /sign
+        call completing first) already changed the row. Callers must
+        surface this as a conflict; never retried internally."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def void(
+        self,
+        signing_request_id: UUID,
+        expected_version: int,
+        superseded_by_signing_request_id: UUID,
+        void_reason: str,
+        voided_at: datetime,
+    ) -> bool:
+        """Atomically sets superseded_by_signing_request_id/voided_at/
+        void_reason on the row (version += 1) — `status` is left
+        untouched (Caso 3, Opción B: the row stays COMPLETED, a
+        completed signature is never cryptographically invalidated).
+        Gated on the current version equalling `expected_version`, same
+        pattern as append_signature/cancel. Returns False if the version
+        check fails."""
+        raise NotImplementedError

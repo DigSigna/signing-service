@@ -59,6 +59,8 @@ __all__ = [
     "SigningPinNotSetError",
     "SigningPinVerificationUnavailableError",
     "SigningRequestConflictError",
+    "SigningRequestNotCancellableError",
+    "SigningRequestNotCompletedError",
     "SigningRequestNotPendingError",
     "TenantRequiredError",
     "ValidationError",
@@ -182,11 +184,42 @@ class SigningRequestNotPendingError(DomainError):
 
 @dataclass
 class SigningRequestConflictError(DomainError):
-    """Raised when SigningRequestRepository.append_signature loses the
-    optimistic-concurrency race (signing-plan.md point 4) — another
-    /sign call on the same signing_request_id committed first. The
-    client should retry the whole call (fresh PIN/session resolution),
-    never silently retried server-side."""
+    """Raised when SigningRequestRepository.append_signature/cancel/void
+    loses the optimistic-concurrency race (signing-plan.md point 4) —
+    another call on the same signing_request_id committed first. The
+    client should retry the whole call (fresh PIN/session resolution for
+    /sign; a fresh GET + decision for /cancel or /void), never silently
+    retried server-side."""
 
     code: ClassVar[str] = "SIGNING_REQUEST_CONFLICT"
     http_status: ClassVar[int] = 409
+
+
+@dataclass
+class SigningRequestNotCancellableError(DomainError):
+    """Raised by CancelSigningRequestUseCaseImpl when the signing_request
+    is structurally out of scope for cancellation in this MVP slice
+    (Caso 2): more than one signer (signers_number > 1 — would need to
+    know which of the N signers already signed, left as a future
+    extension), or no single identifiable owner (user_id IS NULL,
+    i.e. ORGANIZATION-owned). Distinct from SigningRequestNotPendingError
+    (right shape, wrong lifecycle state)."""
+
+    code: ClassVar[str] = "SIGNING_REQUEST_NOT_CANCELLABLE"
+    http_status: ClassVar[int] = 422
+
+    signing_request_id: Optional[str] = None
+
+
+@dataclass
+class SigningRequestNotCompletedError(DomainError):
+    """Raised by VoidSigningRequestUseCaseImpl when the OLD signing_request
+    never reached COMPLETED (Caso 3, Opción B) — superseding only makes
+    sense for a document that was actually signed; a request still
+    PENDING should be cancelled instead (CancelSigningRequestUseCase),
+    not voided."""
+
+    code: ClassVar[str] = "SIGNING_REQUEST_NOT_COMPLETED"
+    http_status: ClassVar[int] = 409
+
+    current_status: Optional[str] = None

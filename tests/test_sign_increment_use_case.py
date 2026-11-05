@@ -166,6 +166,12 @@ class _FakeSigningRequestRepository(SigningRequestRepository):
         self.signatures[signature.id] = signature
         return True
 
+    async def cancel(self, *args, **kwargs) -> bool:
+        raise NotImplementedError
+
+    async def void(self, *args, **kwargs) -> bool:
+        raise NotImplementedError
+
 
 class _FakeHSMClient(HSMClient):
     def __init__(self):

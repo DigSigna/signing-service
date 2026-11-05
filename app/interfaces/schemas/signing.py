@@ -7,12 +7,16 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.domain.ports.input.CancelSigningRequestUseCase import (
+    CancelSigningRequestResult,
+)
 from app.domain.ports.input.CreateSigningRequestUseCase import (
     CreateSigningRequestResult,
 )
 from app.domain.ports.input.GetSigningRequestUseCase import GetSigningRequestResult
 from app.domain.ports.input.SignDocumentUseCase import SignDocumentResult
 from app.domain.ports.input.SignIncrementUseCase import SignIncrementResult
+from app.domain.ports.input.VoidSigningRequestUseCase import VoidSigningRequestResult
 
 _PIN_PATTERN = r"^\d{4,6}$"
 _MAX_SIGNERS = 20  # pragmatic guard against abuse, not a modeled business limit.
@@ -232,6 +236,15 @@ class GetSigningRequestResponse(BaseModel):
     document_b64: Optional[str] = Field(
         None, description="Solo presente si status == COMPLETED"
     )
+    superseded_by_signing_request_id: Optional[UUID] = Field(
+        None,
+        description="Id del signing_request nuevo que reemplaza a este "
+        "(Caso 3, Opción B) — presente solo si fue marcado como superado",
+    )
+    voided_at: Optional[datetime] = Field(
+        None, description="Cuándo se marcó como superado — None si sigue vigente"
+    )
+    void_reason: Optional[str] = None
 
     @classmethod
     def from_result(
@@ -249,4 +262,71 @@ class GetSigningRequestResponse(BaseModel):
                 if result.document is not None
                 else None
             ),
+            superseded_by_signing_request_id=result.superseded_by_signing_request_id,
+            voided_at=result.voided_at,
+            void_reason=result.void_reason,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Caso 2: cancelar un signing_request de un solo firmante antes de firmar.
+# ---------------------------------------------------------------------------
+
+
+class CancelSigningRequestResponse(BaseModel):
+    signing_request_id: UUID
+    status: str = Field(..., description="Siempre 'CANCELLED' en una respuesta 200")
+
+    @classmethod
+    def from_result(
+        cls, result: CancelSigningRequestResult
+    ) -> "CancelSigningRequestResponse":
+        return cls(
+            signing_request_id=result.signing_request_id,
+            status=result.status,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Caso 3, Opción B: marcar un signing_request ya COMPLETED como superado.
+# ---------------------------------------------------------------------------
+
+
+class VoidSigningRequestRequest(BaseModel):
+    superseded_by_signing_request_id: UUID = Field(
+        ..., description="Id del signing_request nuevo que reemplaza a este"
+    )
+    reason: str = Field(..., min_length=1, max_length=255)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "superseded_by_signing_request_id": (
+                    "a1b2c3d4-0000-0000-0000-000000000099"
+                ),
+                "reason": "Corrección de domicilio del firmante",
+            }
+        }
+    )
+
+
+class VoidSigningRequestResponse(BaseModel):
+    signing_request_id: UUID
+    status: str = Field(
+        ..., description="Siempre 'COMPLETED' -- marcar como superado nunca lo cambia"
+    )
+    superseded_by_signing_request_id: UUID
+    voided_at: datetime
+    void_reason: Optional[str] = None
+
+    @classmethod
+    def from_result(
+        cls, result: VoidSigningRequestResult
+    ) -> "VoidSigningRequestResponse":
+        return cls(
+            signing_request_id=result.signing_request_id,
+            status=result.status,
+            superseded_by_signing_request_id=result.superseded_by_signing_request_id,
+            voided_at=result.voided_at,
+            void_reason=result.void_reason,
         )

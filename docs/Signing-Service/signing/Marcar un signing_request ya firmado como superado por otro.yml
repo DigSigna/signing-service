@@ -1,0 +1,195 @@
+info:
+  name: Marcar un signing_request ya firmado como superado por otro
+  type: http
+  seq: 5
+  tags:
+    - signing
+
+http:
+  method: POST
+  url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/void"
+  params:
+    - name: signing_request_id
+      value: ""
+      type: path
+  body:
+    type: json
+    data: |-
+      {
+        "reason": "Corrección de domicilio del firmante",
+        "superseded_by_signing_request_id": "a1b2c3d4-0000-0000-0000-000000000099"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false
+
+examples:
+  - name: 200 Response
+    description: Successful Response
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/void"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+      body:
+        type: json
+        data: |-
+          {
+            "reason": "Corrección de domicilio del firmante",
+            "superseded_by_signing_request_id": "a1b2c3d4-0000-0000-0000-000000000099"
+          }
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "signing_request_id": "",
+            "status": "",
+            "superseded_by_signing_request_id": "",
+            "voided_at": "",
+            "void_reason": ""
+          }
+  - name: 403 Response
+    description: AuthorizationError — el caller no es el firmante registrado ni un admin de tenant/organización
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/void"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+      body:
+        type: json
+        data: |-
+          {
+            "reason": "Corrección de domicilio del firmante",
+            "superseded_by_signing_request_id": "a1b2c3d4-0000-0000-0000-000000000099"
+          }
+    response:
+      status: 403
+      statusText: Forbidden
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "error": {
+              "code": "",
+              "message": "",
+              "details": {}
+            }
+          }
+  - name: 404 Response
+    description: NotFoundError — signing_request_id no existe o pertenece a otro tenant
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/void"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+      body:
+        type: json
+        data: |-
+          {
+            "reason": "Corrección de domicilio del firmante",
+            "superseded_by_signing_request_id": "a1b2c3d4-0000-0000-0000-000000000099"
+          }
+    response:
+      status: 404
+      statusText: Not Found
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "error": {
+              "code": "",
+              "message": "",
+              "details": {}
+            }
+          }
+  - name: 409 Response
+    description: SigningRequestNotCompletedError (el signing_request viejo nunca llegó a COMPLETED), SigningRequestConflictError (otra escritura concurrente ganó la carrera — reintentar), o DuplicateRequestError
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/void"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+      body:
+        type: json
+        data: |-
+          {
+            "reason": "Corrección de domicilio del firmante",
+            "superseded_by_signing_request_id": "a1b2c3d4-0000-0000-0000-000000000099"
+          }
+    response:
+      status: 409
+      statusText: Conflict
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "error": {
+              "code": "",
+              "message": "",
+              "details": {}
+            }
+          }
+  - name: 422 Response
+    description: Validation Error
+    request:
+      url: "{{baseUrl}}/api/v1/signing-requests/:signing_request_id/void"
+      method: POST
+      params:
+        - name: signing_request_id
+          value: ""
+          type: path
+      body:
+        type: json
+        data: |-
+          {
+            "reason": "Corrección de domicilio del firmante",
+            "superseded_by_signing_request_id": "a1b2c3d4-0000-0000-0000-000000000099"
+          }
+    response:
+      status: 422
+      statusText: Unprocessable Entity
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "detail": [
+              {
+                "loc": [],
+                "msg": "",
+                "type": ""
+              }
+            ]
+          }
+
+docs: "Caso 3, Opción B: una firma ya aplicada no puede invalidarse criptográficamente -- esto solo anota, a nivel de negocio, que este signing_request COMPLETED ya no es el vigente. Nunca cambia `status` (sigue COMPLETED), nunca toca certificate-service. Puede invocarlo el propio firmante (signing_requests.user_id) o un admin de tenant/organización."
